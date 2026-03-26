@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tutorial Vault</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-dot"></div>
+          <div>
+            <p class="brand-title">Tutorial Vault</p>
+            <p class="brand-subtitle">Tu biblioteca personal</p>
+          </div>
+        </div>
+
+        <nav class="sidebar-nav">
+          <button class="nav-item is-active" type="button">Biblioteca</button>
+          <button class="nav-item" type="button" id="seedDataButton">Cargar demo</button>
+          <button class="nav-item" type="button" id="exportButton">Exportar JSON</button>
+          <button class="nav-item" type="button" id="importButton">Importar JSON</button>
+          <input id="importInput" type="file" accept=".json" hidden />
+        </nav>
+
+        <section class="sidebar-section">
+          <p class="section-title">Atajos</p>
+          <div class="shortcut-list">
+            <button type="button" class="shortcut" data-status-shortcut="Por ver">Por ver</button>
+            <button type="button" class="shortcut" data-status-shortcut="En progreso">En progreso</button>
+            <button type="button" class="shortcut" data-status-shortcut="Aplicado">Aplicado</button>
+          </div>
+        </section>
+      </aside>
+
+      <main class="workspace">
+        <header class="workspace-header">
+          <div>
+            <p class="eyebrow">Gestor de contenido</p>
+            <h1>Tutoriales</h1>
+            <p class="header-description">
+              Guarda links, imágenes y texto. Organiza por categoría, estado y prioridad.
+            </p>
+          </div>
+          <button id="newTutorialButton" class="primary-btn" type="button">+ Nuevo tutorial</button>
+        </header>
+
+        <section class="stats-grid" id="statsGrid"></section>
+
+        <section class="filters">
+          <label>
+            Buscar
+            <input id="searchInput" type="search" placeholder="Título, nota, etiqueta..." />
+          </label>
+
+          <label>
+            Vista
+            <select id="viewSelect">
+              <option value="table">Tabla</option>
+              <option value="gallery">Galería</option>
+              <option value="board">Tablero</option>
+            </select>
+          </label>
+
+          <label>
+            Tipo
+            <select id="typeFilter">
+              <option value="all">Todos</option>
+              <option value="video">Video</option>
+              <option value="image">Imagen</option>
+              <option value="text">Texto</option>
+            </select>
+          </label>
+
+          <label>
+            Estado
+            <select id="statusFilter">
+              <option value="all">Todos</option>
+              <option value="Por ver">Por ver</option>
+              <option value="En progreso">En progreso</option>
+              <option value="Aplicado">Aplicado</option>
+              <option value="Archivado">Archivado</option>
+            </select>
+          </label>
+
+          <label>
+            Categoría
+            <select id="categoryFilter">
+              <option value="all">Todas</option>
+            </select>
+          </label>
+        </section>
+
+        <section id="tableView" class="content-view"></section>
+        <section id="galleryView" class="content-view hidden"></section>
+        <section id="boardView" class="content-view hidden"></section>
+      </main>
+    </div>
+
+    <dialog id="tutorialDialog" class="dialog">
+      <form id="tutorialForm" method="dialog" novalidate>
+        <header class="dialog-header">
+          <h2 id="dialogTitle">Nuevo tutorial</h2>
+          <button type="button" id="closeDialogButton" class="ghost-btn">Cerrar</button>
+        </header>
+
+        <div class="form-grid">
+          <label>
+            Título
+            <input name="title" required placeholder="Ej: Lighting en Photoshop" />
+          </label>
+
+          <label>
+            Tipo
+            <select name="type" id="typeInput">
+              <option value="video">Video</option>
+              <option value="image">Imagen</option>
+              <option value="text">Texto</option>
+            </select>
+          </label>
+
+          <label>
+            Fuente
+            <select name="source" id="sourceInput">
+              <option value="youtube">YouTube</option>
+              <option value="instagram">Instagram</option>
+              <option value="manual">Manual</option>
+            </select>
+          </label>
+
+          <label>
+            URL o referencia
+            <input name="url" type="url" placeholder="https://..." />
+          </label>
+
+          <label>
+            Categoría
+            <input name="category" placeholder="Ej: Branding" />
+          </label>
+
+          <label>
+            Colección
+            <input name="collection" placeholder="Ej: Portfolio 2026" />
+          </label>
+
+          <label>
+            Estado
+            <select name="status">
+              <option value="Por ver">Por ver</option>
+              <option value="En progreso">En progreso</option>
+              <option value="Aplicado">Aplicado</option>
+              <option value="Archivado">Archivado</option>
+            </select>
+          </label>
+
+          <label>
+            Prioridad
+            <select name="priority">
+              <option value="Alta">Alta</option>
+              <option value="Media">Media</option>
+              <option value="Baja">Baja</option>
+            </select>
+          </label>
+
+          <label>
+            Fecha de repaso
+            <input name="reviewDate" type="date" />
+          </label>
+
+          <label>
+            Etiquetas (coma separadas)
+            <input name="tags" placeholder="UI, composición, color" />
+          </label>
+        </div>
+
+        <label class="full-width" id="imageUrlField">
+          URL de imagen
+          <input name="imageUrl" type="url" placeholder="https://..." />
+        </label>
+
+        <label class="full-width" id="textContentField">
+          Contenido de texto
+          <textarea name="textContent" rows="5" placeholder="Pega aquí tus notas o tutorial en texto"></textarea>
+        </label>
+
+        <label class="full-width">
+          Notas
+          <textarea name="notes" rows="3" placeholder="Qué aprendiste o cómo aplicarlo"></textarea>
+        </label>
+
+        <label class="full-width">
+          Timestamps (uno por línea)
+          <textarea
+            name="timestamps"
+            rows="3"
+            placeholder="00:45 Intro&#10;03:10 Técnica clave&#10;10:22 Ejemplo práctico"
+          ></textarea>
+        </label>
+
+        <footer class="dialog-footer">
+          <button class="ghost-btn" id="deleteButton" type="button">Eliminar</button>
+          <button class="primary-btn" type="submit">Guardar</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <template id="emptyStateTemplate">
+      <div class="empty-state">
+        <h3>No hay tutoriales en esta vista</h3>
+        <p>Crea tu primer tutorial con el botón "Nuevo tutorial".</p>
+      </div>
+    </template>
+
+    <script src="app.js"></script>
+  </body>
+</html>

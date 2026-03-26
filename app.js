@@ -1,9 +1,8 @@
-const STORAGE_KEY = "tutorial_vault_v1";
-
+const API_BASE = "/api";
 const STATUS_ORDER = ["Por ver", "En progreso", "Aplicado", "Archivado"];
 
 const state = {
-  tutorials: loadTutorials(),
+  tutorials: [],
   search: "",
   view: "table",
   type: "all",
@@ -28,6 +27,7 @@ const refs = {
   tutorialForm: document.querySelector("#tutorialForm"),
   closeDialogButton: document.querySelector("#closeDialogButton"),
   deleteButton: document.querySelector("#deleteButton"),
+  saveButton: document.querySelector("#tutorialForm button[type='submit']"),
   emptyStateTemplate: document.querySelector("#emptyStateTemplate"),
   seedDataButton: document.querySelector("#seedDataButton"),
   exportButton: document.querySelector("#exportButton"),
@@ -37,14 +37,15 @@ const refs = {
   sourceInput: document.querySelector("#sourceInput"),
   imageUrlField: document.querySelector("#imageUrlField"),
   textContentField: document.querySelector("#textContentField"),
+  syncStatus: document.querySelector("#syncStatus"),
 };
 
-init();
+void init();
 
-function init() {
+async function init() {
   bindEvents();
   syncTypeSpecificFields();
-  render();
+  await refreshTutorials();
 }
 
 function bindEvents() {
@@ -83,37 +84,26 @@ function bindEvents() {
 
   refs.tutorialForm.addEventListener("submit", (event) => {
     event.preventDefault();
-    upsertTutorialFromForm();
+    void upsertTutorialFromForm();
   });
 
   refs.deleteButton.addEventListener("click", () => {
-    if (!state.editingId) {
-      refs.dialog.close();
-      return;
-    }
-
-    const item = state.tutorials.find((tutorial) => tutorial.id === state.editingId);
-    if (!item) {
-      refs.dialog.close();
-      return;
-    }
-
-    const confirmed = window.confirm(`Eliminar "${item.title}"?`);
-    if (!confirmed) {
-      return;
-    }
-
-    state.tutorials = state.tutorials.filter((tutorial) => tutorial.id !== state.editingId);
-    persistTutorials();
-    refs.dialog.close();
-    render();
+    void deleteEditingTutorial();
   });
 
-  refs.tableView.addEventListener("click", onActionClick);
-  refs.galleryView.addEventListener("click", onActionClick);
-  refs.boardView.addEventListener("click", onActionClick);
+  refs.tableView.addEventListener("click", (event) => {
+    void onActionClick(event);
+  });
+  refs.galleryView.addEventListener("click", (event) => {
+    void onActionClick(event);
+  });
+  refs.boardView.addEventListener("click", (event) => {
+    void onActionClick(event);
+  });
 
-  refs.typeInput.addEventListener("change", syncTypeSpecificFields);
+  refs.typeInput.addEventListener("change", () => {
+    syncTypeSpecificFields();
+  });
 
   document.querySelectorAll("[data-status-shortcut]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -124,21 +114,17 @@ function bindEvents() {
   });
 
   refs.seedDataButton.addEventListener("click", () => {
-    if (state.tutorials.length > 0) {
-      const confirmed = window.confirm("Ya tienes datos. ¿Agregar ejemplos igualmente?");
-      if (!confirmed) {
-        return;
-      }
-    }
-    injectDemoData();
+    void injectDemoData();
   });
 
   refs.exportButton.addEventListener("click", exportJson);
   refs.importButton.addEventListener("click", () => refs.importInput.click());
-  refs.importInput.addEventListener("change", importJson);
+  refs.importInput.addEventListener("change", (event) => {
+    void importJson(event);
+  });
 }
 
-function onActionClick(event) {
+async function onActionClick(event) {
   const editTarget = event.target.closest("[data-edit-id]");
   if (editTarget) {
     openDialogForEdit(editTarget.dataset.editId);
@@ -161,9 +147,12 @@ function onActionClick(event) {
     return;
   }
 
-  state.tutorials = state.tutorials.filter((tutorial) => tutorial.id !== id);
-  persistTutorials();
-  render();
+  try {
+    await apiDeleteTutorial(id);
+    await refreshTutorials();
+  } catch (error) {
+    showOperationError(error, "No se pudo eliminar el tutorial.");
+  }
 }
 
 function render() {
@@ -365,8 +354,8 @@ function openDialogForCreate() {
   refs.deleteButton.classList.add("hidden");
   refs.tutorialForm.reset();
   refs.typeInput.value = "video";
-  refs.sourceInput.value = "youtube";
   syncTypeSpecificFields();
+  refs.sourceInput.value = "youtube";
   refs.dialog.showModal();
 }
 
@@ -375,13 +364,15 @@ function openDialogForEdit(id) {
   if (!tutorial) {
     return;
   }
+
   state.editingId = id;
   refs.dialogTitle.textContent = "Editar tutorial";
   refs.deleteButton.classList.remove("hidden");
 
   refs.tutorialForm.elements.title.value = tutorial.title;
   refs.tutorialForm.elements.type.value = tutorial.type;
-  refs.tutorialForm.elements.source.value = tutorial.source;
+  syncTypeSpecificFields();
+  refs.tutorialForm.elements.source.value = tutorial.source || "manual";
   refs.tutorialForm.elements.url.value = tutorial.url || "";
   refs.tutorialForm.elements.category.value = tutorial.category || "";
   refs.tutorialForm.elements.collection.value = tutorial.collection || "";
@@ -393,12 +384,10 @@ function openDialogForEdit(id) {
   refs.tutorialForm.elements.textContent.value = tutorial.textContent || "";
   refs.tutorialForm.elements.notes.value = tutorial.notes || "";
   refs.tutorialForm.elements.timestamps.value = tutorial.timestamps.join("\n");
-
-  syncTypeSpecificFields();
   refs.dialog.showModal();
 }
 
-function upsertTutorialFromForm() {
+async function upsertTutorialFromForm() {
   const form = refs.tutorialForm.elements;
   const title = form.title.value.trim();
   const type = form.type.value;
@@ -421,12 +410,12 @@ function upsertTutorialFromForm() {
     }
   }
 
-  const source = pickSource(form.source.value, url);
-  const model = {
-    id: state.editingId || crypto.randomUUID(),
+  const now = new Date().toISOString();
+  const payload = {
+    id: state.editingId || createId(),
     title,
     type,
-    source,
+    source: pickSource(form.source.value, url),
     url,
     normalizedUrl,
     imageUrl: form.imageUrl.value.trim(),
@@ -442,31 +431,59 @@ function upsertTutorialFromForm() {
       .split("\n")
       .map((line) => line.trim())
       .filter(Boolean),
-    updatedAt: new Date().toISOString(),
+    updatedAt: now,
   };
 
+  setFormBusy(true);
+  try {
+    if (state.editingId) {
+      await apiUpdateTutorial(state.editingId, payload);
+    } else {
+      payload.createdAt = now;
+      await apiCreateTutorial(payload);
+    }
+    refs.dialog.close();
+    await refreshTutorials();
+  } catch (error) {
+    showOperationError(error, "No se pudo guardar el tutorial.");
+  } finally {
+    setFormBusy(false);
+  }
+}
+
+async function deleteEditingTutorial() {
   if (!state.editingId) {
-    model.createdAt = model.updatedAt;
-    state.tutorials.unshift(model);
-  } else {
-    state.tutorials = state.tutorials.map((tutorial) =>
-      tutorial.id === state.editingId
-        ? {
-            ...tutorial,
-            ...model,
-            createdAt: tutorial.createdAt,
-          }
-        : tutorial
-    );
+    refs.dialog.close();
+    return;
   }
 
-  persistTutorials();
-  refs.dialog.close();
-  render();
+  const item = state.tutorials.find((tutorial) => tutorial.id === state.editingId);
+  if (!item) {
+    refs.dialog.close();
+    return;
+  }
+
+  const confirmed = window.confirm(`Eliminar "${item.title}"?`);
+  if (!confirmed) {
+    return;
+  }
+
+  setFormBusy(true);
+  try {
+    await apiDeleteTutorial(state.editingId);
+    refs.dialog.close();
+    await refreshTutorials();
+  } catch (error) {
+    showOperationError(error, "No se pudo eliminar el tutorial.");
+  } finally {
+    setFormBusy(false);
+  }
 }
 
 function syncTypeSpecificFields() {
   const type = refs.typeInput.value;
+  const previousSource = refs.sourceInput.value;
+
   refs.imageUrlField.classList.toggle("hidden", type !== "image");
   refs.textContentField.classList.toggle("hidden", type !== "text");
 
@@ -476,10 +493,12 @@ function syncTypeSpecificFields() {
       <option value="instagram">Instagram</option>
       <option value="manual">Manual</option>
     `;
+    refs.sourceInput.value = ["youtube", "instagram", "manual"].includes(previousSource) ? previousSource : "youtube";
     return;
   }
 
   refs.sourceInput.innerHTML = `<option value="manual">Manual</option>`;
+  refs.sourceInput.value = "manual";
 }
 
 function getFilteredTutorials() {
@@ -632,67 +651,49 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-function loadTutorials() {
+function createId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function setFormBusy(isBusy) {
+  Array.from(refs.tutorialForm.elements).forEach((element) => {
+    element.disabled = isBusy;
+  });
+  refs.saveButton.textContent = isBusy ? "Guardando..." : "Guardar";
+}
+
+function setSyncStatus(message, isError = false) {
+  refs.syncStatus.textContent = message;
+  refs.syncStatus.classList.toggle("is-error", isError);
+}
+
+function showOperationError(error, fallbackMessage) {
+  console.error(error);
+  const message = error instanceof Error && error.message ? error.message : fallbackMessage;
+  window.alert(message || fallbackMessage);
+}
+
+async function refreshTutorials() {
+  setSyncStatus("Sincronizando con el servidor...");
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      return [];
-    }
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-    return parsed;
-  } catch {
-    return [];
+    const tutorials = await apiListTutorials();
+    state.tutorials = tutorials.map(normalizeTutorial);
+    setSyncStatus(`Sincronizado · ${new Date().toLocaleTimeString("es-BO", { hour: "2-digit", minute: "2-digit" })}`);
+  } catch (error) {
+    console.error(error);
+    setSyncStatus("No se pudo conectar con el backend. Inicia el servidor con npm start.", true);
+  } finally {
+    render();
   }
 }
 
-function persistTutorials() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.tutorials));
-}
-
-function exportJson() {
-  const payload = JSON.stringify(state.tutorials, null, 2);
-  const blob = new Blob([payload], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `tutorial-vault-${new Date().toISOString().slice(0, 10)}.json`;
-  anchor.click();
-  URL.revokeObjectURL(url);
-}
-
-function importJson(event) {
-  const file = event.target.files?.[0];
-  if (!file) {
-    return;
-  }
-  const reader = new FileReader();
-  reader.onload = () => {
-    try {
-      const parsed = JSON.parse(String(reader.result));
-      if (!Array.isArray(parsed)) {
-        throw new Error("Formato inválido");
-      }
-
-      state.tutorials = parsed.map((item) => sanitizeImportedTutorial(item));
-      persistTutorials();
-      render();
-      window.alert(`Importación completada: ${state.tutorials.length} tutoriales.`);
-    } catch {
-      window.alert("No se pudo importar el archivo JSON.");
-    } finally {
-      refs.importInput.value = "";
-    }
-  };
-  reader.readAsText(file);
-}
-
-function sanitizeImportedTutorial(item) {
+function normalizeTutorial(item) {
   const now = new Date().toISOString();
   return {
-    id: typeof item.id === "string" ? item.id : crypto.randomUUID(),
+    id: typeof item.id === "string" ? item.id : createId(),
     title: typeof item.title === "string" && item.title.trim() ? item.title.trim() : "Sin título",
     type: validType(item.type) ? item.type : "text",
     source: typeof item.source === "string" ? item.source : "manual",
@@ -717,11 +718,53 @@ function validType(type) {
   return type === "video" || type === "image" || type === "text";
 }
 
-function injectDemoData() {
+function exportJson() {
+  const payload = JSON.stringify(state.tutorials, null, 2);
+  const blob = new Blob([payload], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `tutorial-vault-${new Date().toISOString().slice(0, 10)}.json`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+async function importJson(event) {
+  const file = event.target.files?.[0];
+  if (!file) {
+    return;
+  }
+
+  try {
+    const text = await file.text();
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed)) {
+      throw new Error("Formato inválido");
+    }
+
+    const normalized = parsed.map((item) => normalizeTutorial(item));
+    await apiReplaceTutorials(normalized);
+    await refreshTutorials();
+    window.alert(`Importación completada: ${normalized.length} tutoriales.`);
+  } catch (error) {
+    showOperationError(error, "No se pudo importar el archivo JSON.");
+  } finally {
+    refs.importInput.value = "";
+  }
+}
+
+async function injectDemoData() {
+  if (state.tutorials.length > 0) {
+    const confirmed = window.confirm("Ya tienes datos. ¿Agregar ejemplos igualmente?");
+    if (!confirmed) {
+      return;
+    }
+  }
+
   const now = new Date().toISOString();
   const demo = [
     {
-      id: crypto.randomUUID(),
+      id: createId(),
       title: "Composición visual para reels",
       type: "video",
       source: "instagram",
@@ -741,7 +784,7 @@ function injectDemoData() {
       updatedAt: now,
     },
     {
-      id: crypto.randomUUID(),
+      id: createId(),
       title: "Diseño de componentes UI en Figma",
       type: "video",
       source: "youtube",
@@ -761,7 +804,7 @@ function injectDemoData() {
       updatedAt: now,
     },
     {
-      id: crypto.randomUUID(),
+      id: createId(),
       title: "Checklist de copy para landing pages",
       type: "text",
       source: "manual",
@@ -782,7 +825,75 @@ function injectDemoData() {
     },
   ];
 
-  state.tutorials = [...demo, ...state.tutorials];
-  persistTutorials();
-  render();
+  try {
+    await apiReplaceTutorials([...demo, ...state.tutorials]);
+    await refreshTutorials();
+  } catch (error) {
+    showOperationError(error, "No se pudo cargar la data de ejemplo.");
+  }
+}
+
+async function apiListTutorials() {
+  return requestJson(`${API_BASE}/tutorials`);
+}
+
+async function apiCreateTutorial(payload) {
+  return requestJson(`${API_BASE}/tutorials`, { method: "POST", body: payload });
+}
+
+async function apiUpdateTutorial(id, payload) {
+  return requestJson(`${API_BASE}/tutorials/${encodeURIComponent(id)}`, { method: "PUT", body: payload });
+}
+
+async function apiDeleteTutorial(id) {
+  return requestJson(`${API_BASE}/tutorials/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+async function apiReplaceTutorials(tutorials) {
+  return requestJson(`${API_BASE}/tutorials/import`, {
+    method: "POST",
+    body: { tutorials },
+  });
+}
+
+async function requestJson(url, options = {}) {
+  const init = {
+    method: options.method || "GET",
+    headers: {},
+  };
+
+  if (options.body !== undefined) {
+    init.headers["Content-Type"] = "application/json";
+    init.body = JSON.stringify(options.body);
+  }
+
+  const response = await fetch(url, init);
+  const body = await readResponseBody(response);
+
+  if (!response.ok) {
+    const message =
+      body && typeof body === "object" && "error" in body && body.error
+        ? body.error
+        : `Error de red (${response.status})`;
+    throw new Error(String(message));
+  }
+
+  return body;
+}
+
+async function readResponseBody(response) {
+  if (response.status === 204) {
+    return null;
+  }
+
+  const text = await response.text();
+  if (!text) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
 }

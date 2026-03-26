@@ -1,1 +1,7 @@
+node_modules/
+data/
+uploads/
+Tutoriales/
+.env
+npm-debug.log*
 .codex/

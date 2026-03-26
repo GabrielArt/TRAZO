@@ -167,6 +167,16 @@ textarea {
   color: var(--muted);
 }
 
+.sync-status {
+  margin-top: 8px;
+  font-size: 0.86rem;
+  color: var(--muted);
+}
+
+.sync-status.is-error {
+  color: var(--danger);
+}
+
 .primary-btn,
 .ghost-btn {
   border-radius: 10px;

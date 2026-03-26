@@ -1014,7 +1014,9 @@ function renderSidebarTutorials() {
         <button type="button" class="shortcut sidebar-tutorial ${state.selectedId === tutorial.id ? "is-active" : ""}" data-open-id="${tutorial.id}">
           <span class="sidebar-tutorial-line">
             <span class="sidebar-tutorial-token">${tutorialTypeToken(tutorial.type)}</span>
-            <span class="sidebar-tutorial-title">${escapeHtml(tutorial.title)}</span>
+            <span class="sidebar-tutorial-title" title="${escapeAttribute(tutorial.title)}">${escapeHtml(
+              truncateSidebarTitle(tutorial.title)
+            )}</span>
           </span>
         </button>
       `
@@ -1960,10 +1962,22 @@ function renderDetailPanel() {
       </div>
     </div>
     <div class="tutorial-properties">
-      <p><strong>Creado:</strong> ${escapeHtml(createdAt)}</p>
-      <p><strong>Actualizado:</strong> ${escapeHtml(updatedAt)}</p>
-      <p><strong>Coleccion:</strong> ${escapeHtml(tutorial.collection || "Sin coleccion")}</p>
-      <p><strong>Fuente:</strong> ${escapeHtml(tutorial.source || "manual")}</p>
+      <div class="tutorial-property-row">
+        <span class="tutorial-property-label">Creado</span>
+        <span class="tutorial-property-value">${escapeHtml(createdAt)}</span>
+      </div>
+      <div class="tutorial-property-row">
+        <span class="tutorial-property-label">Actualizado</span>
+        <span class="tutorial-property-value">${escapeHtml(updatedAt)}</span>
+      </div>
+      <div class="tutorial-property-row">
+        <span class="tutorial-property-label">Coleccion</span>
+        <span class="tutorial-property-value">${escapeHtml(tutorial.collection || "Sin coleccion")}</span>
+      </div>
+      <div class="tutorial-property-row">
+        <span class="tutorial-property-label">Fuente</span>
+        <span class="tutorial-property-value">${escapeHtml(formatSource(tutorial.source || "manual"))}</span>
+      </div>
     </div>
     <div class="detail-grid">
       <div class="media-frame">${renderDetailMedia(tutorial)}</div>
@@ -2451,6 +2465,28 @@ function statusPillClass(status) {
 
 function formatType(type) {
   return type === "video" ? "Video" : type === "image" ? "Imagen" : "Texto";
+}
+
+function truncateSidebarTitle(value, maxLength = 34) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return "Sin titulo";
+  }
+  if (text.length <= maxLength) {
+    return text;
+  }
+  const cut = Math.max(1, maxLength - 3);
+  return `${text.slice(0, cut).trimEnd()}...`;
+}
+
+function formatSource(source) {
+  if (source === "youtube") {
+    return "YouTube";
+  }
+  if (source === "instagram") {
+    return "Instagram";
+  }
+  return "Manual";
 }
 
 function tutorialTypeToken(type) {

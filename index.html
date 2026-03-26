@@ -6,10 +6,7 @@
     <title>Tutorial Vault</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,500&display=swap"
-      rel="stylesheet"
-    />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -19,17 +16,20 @@
           <div class="brand-dot"></div>
           <div>
             <p class="brand-title">Tutorial Vault</p>
-            <p class="brand-subtitle">Tu biblioteca personal</p>
+            <p class="brand-subtitle">Biblioteca personal</p>
           </div>
         </div>
 
         <nav class="sidebar-nav">
-          <button class="nav-item is-active" type="button">Biblioteca</button>
-          <button class="nav-item" type="button" id="seedDataButton">Cargar demo</button>
-          <button class="nav-item" type="button" id="exportButton">Exportar JSON</button>
-          <button class="nav-item" type="button" id="importButton">Importar JSON</button>
-          <input id="importInput" type="file" accept=".json" hidden />
+          <button class="nav-item" type="button" id="searchNavButton">Buscar</button>
+          <button class="nav-item is-active" type="button" id="libraryNavButton">Biblioteca</button>
+          <button type="button" class="nav-item" id="settingsNavButton">Configuracion</button>
         </nav>
+
+        <section class="sidebar-section">
+          <p class="section-title">Tutoriales</p>
+          <div id="sidebarTutorialsList" class="shortcut-list"></div>
+        </section>
 
         <section class="sidebar-section">
           <p class="section-title">Atajos</p>
@@ -39,39 +39,210 @@
             <button type="button" class="shortcut" data-status-shortcut="Aplicado">Aplicado</button>
           </div>
         </section>
+
+        <section class="sidebar-section">
+          <p class="section-title">Colecciones inteligentes</p>
+          <div id="smartCollectionsList" class="shortcut-list"></div>
+        </section>
+
+        <section class="sidebar-section">
+          <p class="section-title">Vistas guardadas</p>
+          <button type="button" class="nav-item" id="saveCurrentViewButton">Guardar vista actual</button>
+          <div id="savedViewsList" class="saved-views-list"></div>
+        </section>
+
+        <section class="sidebar-section account-section">
+          <p class="section-title">Cuenta</p>
+          <p id="userBadge" class="user-badge">No autenticado</p>
+          <button type="button" class="nav-item hidden" id="logoutButton">Cerrar sesion</button>
+        </section>
       </aside>
 
       <main class="workspace">
-        <header class="workspace-header">
-          <div>
-            <p class="eyebrow">Gestor de contenido</p>
-            <h1>Tutoriales</h1>
-            <p class="header-description">
-              Guarda links, imágenes y texto. Organiza por categoría, estado y prioridad.
+        <section id="authGate" class="auth-gate hidden">
+          <div class="auth-card">
+            <p class="eyebrow">Acceso</p>
+            <h2>Inicia sesion para sincronizar</h2>
+            <p class="auth-description">
+              Tus tutoriales se guardan por cuenta para usar la app en varios dispositivos.
             </p>
-            <p id="syncStatus" class="sync-status">Conectando con el servidor...</p>
+
+            <div class="auth-toggle">
+              <button type="button" class="ghost-btn is-active" id="showLoginButton">Iniciar sesion</button>
+              <button type="button" class="ghost-btn" id="showRegisterButton">Crear cuenta</button>
+            </div>
+
+            <form id="loginForm" class="auth-form">
+              <label>
+                Email
+                <input name="email" type="email" required placeholder="tu@email.com" />
+              </label>
+              <label>
+                Clave
+                <input name="password" type="password" required minlength="8" placeholder="Minimo 8 caracteres" />
+              </label>
+              <button type="submit" class="primary-btn">Entrar</button>
+            </form>
+
+            <form id="registerForm" class="auth-form hidden">
+              <label>
+                Email
+                <input name="email" type="email" required placeholder="tu@email.com" />
+              </label>
+              <label>
+                Clave
+                <input name="password" type="password" required minlength="8" placeholder="Minimo 8 caracteres" />
+              </label>
+              <button type="submit" class="primary-btn">Crear cuenta</button>
+            </form>
+
+            <p id="authMessage" class="auth-message"></p>
           </div>
-          <button id="newTutorialButton" class="primary-btn" type="button">+ Nuevo tutorial</button>
+        </section>
+
+        <section id="appContent" class="hidden">
+          <section id="libraryPage" class="page-view">
+            <header class="workspace-header">
+              <div class="header-copy">
+                <h1>Biblioteca</h1>
+                <p id="syncStatus" class="sync-status hidden">Conectando con el servidor...</p>
+              </div>
+              <div class="header-actions">
+                <div class="view-switch" role="tablist" aria-label="Vista biblioteca">
+                  <button type="button" class="ghost-btn view-switch-btn" data-view-target="table">Lista</button>
+                  <button type="button" class="ghost-btn view-switch-btn" data-view-target="gallery">Galeria</button>
+                </div>
+                <button id="shortcutsButton" type="button" class="ghost-btn">Atajos</button>
+                <button id="newTutorialButton" class="primary-btn" type="button">+ Nuevo tutorial</button>
+              </div>
+            </header>
+
+            <section class="stats-grid" id="statsGrid"></section>
+
+            <section id="bulkPanel" class="bulk-panel hidden">
+              <p id="bulkCount" class="bulk-count">0 seleccionados</p>
+              <div class="bulk-actions">
+                <button id="selectVisibleButton" type="button" class="ghost-btn">Seleccionar visibles</button>
+                <button id="clearSelectionButton" type="button" class="ghost-btn">Limpiar</button>
+                <select id="bulkStatusSelect">
+                  <option value="">Estado...</option>
+                  <option value="Por ver">Por ver</option>
+                  <option value="En progreso">En progreso</option>
+                  <option value="Aplicado">Aplicado</option>
+                  <option value="Archivado">Archivado</option>
+                </select>
+                <button id="applyBulkStatusButton" type="button" class="ghost-btn">Aplicar estado</button>
+                <select id="bulkPrioritySelect">
+                  <option value="">Prioridad...</option>
+                  <option value="Alta">Alta</option>
+                  <option value="Media">Media</option>
+                  <option value="Baja">Baja</option>
+                </select>
+                <button id="applyBulkPriorityButton" type="button" class="ghost-btn">Aplicar prioridad</button>
+                <button id="bulkFavoriteOnButton" type="button" class="ghost-btn">Favorito ON</button>
+                <button id="bulkFavoriteOffButton" type="button" class="ghost-btn">Favorito OFF</button>
+                <button id="bulkDeleteButton" type="button" class="ghost-btn danger-btn">Eliminar seleccion</button>
+              </div>
+            </section>
+
+            <section id="reminderPanel" class="reminder-panel hidden"></section>
+            <section id="duplicatePanel" class="duplicate-panel hidden"></section>
+            <section id="tableView" class="content-view"></section>
+            <section id="galleryView" class="content-view hidden"></section>
+            <section id="boardView" class="content-view hidden"></section>
+          </section>
+
+          <section id="tutorialPage" class="page-view hidden">
+            <section id="detailPanel" class="detail-panel"></section>
+          </section>
+
+          <section id="settingsPage" class="page-view settings-overlay hidden">
+            <div class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+              <aside class="settings-side">
+                <p class="section-title">Cuenta</p>
+                <button type="button" class="nav-item is-active">Preferencias</button>
+                <button type="button" class="nav-item" data-go-page="library">Cerrar</button>
+              </aside>
+
+              <div class="settings-content">
+                <header class="workspace-header settings-header">
+                  <div class="header-copy">
+                    <p class="eyebrow">Cuenta</p>
+                    <h1 id="settingsTitle">Configuracion</h1>
+                    <p class="header-description">
+                      Ajusta apariencia y administra los datos de tu biblioteca.
+                    </p>
+                  </div>
+                </header>
+
+                <section class="settings-grid">
+                  <article class="settings-card">
+                    <h3>Apariencia y recordatorios</h3>
+                    <p class="meta">Personaliza la app y activa notificaciones de repaso.</p>
+                    <div class="settings-actions">
+                      <button id="themeToggleButton" type="button" class="ghost-btn">Tema oscuro</button>
+                      <button id="enableRemindersButton" type="button" class="ghost-btn">Recordatorios</button>
+                    </div>
+                  </article>
+
+                  <article class="settings-card">
+                    <h3>Gestion de datos</h3>
+                    <p class="meta">Carga ejemplos, exporta tu backup o importa un archivo JSON.</p>
+                    <div class="settings-actions">
+                      <button class="ghost-btn" type="button" id="seedDataButton">Cargar demo</button>
+                      <button class="ghost-btn" type="button" id="exportButton">Exportar JSON</button>
+                      <button class="ghost-btn" type="button" id="importButton">Importar JSON</button>
+                      <input id="importInput" type="file" accept=".json" hidden />
+                    </div>
+                  </article>
+                </section>
+              </div>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="searchDialog" class="dialog search-dialog">
+      <form id="searchForm" novalidate>
+        <header class="dialog-header">
+          <h2>Buscar y filtrar</h2>
+          <button type="button" id="closeSearchButton" class="ghost-btn">Cerrar</button>
         </header>
 
-        <section class="stats-grid" id="statsGrid"></section>
-
         <section class="filters">
-          <label>
+          <label class="filter-search essential-filter">
             Buscar
-            <input id="searchInput" type="search" placeholder="Título, nota, etiqueta..." />
+            <input id="searchInput" type="search" placeholder="Titulo, nota, etiqueta..." />
           </label>
 
-          <label>
+          <label class="essential-filter">
             Vista
             <select id="viewSelect">
               <option value="table">Tabla</option>
-              <option value="gallery">Galería</option>
-              <option value="board">Tablero</option>
+              <option value="gallery">Galeria</option>
             </select>
           </label>
 
-          <label>
+          <label class="advanced-filter">
+            Ordenar por
+            <select id="sortBySelect">
+              <option value="updatedAt">Actualizacion</option>
+              <option value="createdAt">Creacion</option>
+              <option value="title">Titulo</option>
+              <option value="reviewDate">Repaso</option>
+            </select>
+          </label>
+
+          <label class="advanced-filter">
+            Orden
+            <select id="sortDirectionSelect">
+              <option value="desc">Descendente</option>
+              <option value="asc">Ascendente</option>
+            </select>
+          </label>
+
+          <label class="essential-filter">
             Tipo
             <select id="typeFilter">
               <option value="all">Todos</option>
@@ -81,7 +252,7 @@
             </select>
           </label>
 
-          <label>
+          <label class="essential-filter">
             Estado
             <select id="statusFilter">
               <option value="all">Todos</option>
@@ -92,19 +263,52 @@
             </select>
           </label>
 
-          <label>
-            Categoría
+          <label class="advanced-filter">
+            Categoria
             <select id="categoryFilter">
               <option value="all">Todas</option>
             </select>
           </label>
+
+          <label class="advanced-filter">
+            Prioridad
+            <select id="priorityFilter">
+              <option value="all">Todas</option>
+              <option value="Alta">Alta</option>
+              <option value="Media">Media</option>
+              <option value="Baja">Baja</option>
+            </select>
+          </label>
+
+          <label class="advanced-filter">
+            Etiqueta
+            <input id="tagFilter" type="search" placeholder="Ej: ui" />
+          </label>
+
+          <label class="advanced-filter">
+            Actualizado desde
+            <input id="updatedFromFilter" type="date" />
+          </label>
+
+          <label class="advanced-filter">
+            Actualizado hasta
+            <input id="updatedToFilter" type="date" />
+          </label>
+
+          <label class="check-row advanced-filter">
+            <input id="favoritesOnlyFilter" type="checkbox" />
+            Solo favoritos
+          </label>
+
+          <div class="filters-actions">
+            <button id="toggleAdvancedFiltersButton" type="button" class="ghost-btn">Mostrar filtros avanzados</button>
+          </div>
         </section>
 
-        <section id="tableView" class="content-view"></section>
-        <section id="galleryView" class="content-view hidden"></section>
-        <section id="boardView" class="content-view hidden"></section>
-      </main>
-    </div>
+        <p id="searchSummary" class="meta search-summary">Sin filtros activos.</p>
+        <section id="searchResults" class="search-results"></section>
+      </form>
+    </dialog>
 
     <dialog id="tutorialDialog" class="dialog">
       <form id="tutorialForm" method="dialog" novalidate>
@@ -115,7 +319,7 @@
 
         <div class="form-grid">
           <label>
-            Título
+            Titulo
             <input name="title" required placeholder="Ej: Lighting en Photoshop" />
           </label>
 
@@ -143,12 +347,12 @@
           </label>
 
           <label>
-            Categoría
+            Categoria
             <input name="category" placeholder="Ej: Branding" />
           </label>
 
           <label>
-            Colección
+            Coleccion
             <input name="collection" placeholder="Ej: Portfolio 2026" />
           </label>
 
@@ -178,9 +382,25 @@
 
           <label>
             Etiquetas (coma separadas)
-            <input name="tags" placeholder="UI, composición, color" />
+            <input name="tags" placeholder="UI, composicion, color" />
           </label>
         </div>
+
+        <section class="full-width upload-zone" id="uploadDropZone">
+          <p class="upload-title">Adjuntar archivo local</p>
+          <p class="upload-copy">Arrastra una imagen, video o archivo de texto aqui para cargarlo.</p>
+          <div class="upload-actions">
+            <button type="button" class="ghost-btn" id="uploadBrowseButton">Seleccionar archivo</button>
+            <input
+              id="uploadInput"
+              type="file"
+              accept="image/*,video/*,.txt,.md,.markdown,text/plain"
+              hidden
+            />
+          </div>
+          <progress id="uploadProgress" class="upload-progress hidden" value="0" max="100"></progress>
+          <p id="uploadStatus" class="upload-status">Sin archivo adjunto</p>
+        </section>
 
         <label class="full-width" id="imageUrlField">
           URL de imagen
@@ -189,20 +409,20 @@
 
         <label class="full-width" id="textContentField">
           Contenido de texto
-          <textarea name="textContent" rows="5" placeholder="Pega aquí tus notas o tutorial en texto"></textarea>
+          <textarea name="textContent" rows="5" placeholder="Pega aqui tus notas o tutorial en texto"></textarea>
         </label>
 
         <label class="full-width">
           Notas
-          <textarea name="notes" rows="3" placeholder="Qué aprendiste o cómo aplicarlo"></textarea>
+          <textarea name="notes" rows="3" placeholder="Que aprendiste o como aplicarlo"></textarea>
         </label>
 
         <label class="full-width">
-          Timestamps (uno por línea)
+          Timestamps (uno por linea)
           <textarea
             name="timestamps"
             rows="3"
-            placeholder="00:45 Intro&#10;03:10 Técnica clave&#10;10:22 Ejemplo práctico"
+            placeholder="00:45 Intro&#10;03:10 Tecnica clave&#10;10:22 Ejemplo practico"
           ></textarea>
         </label>
 
@@ -213,10 +433,25 @@
       </form>
     </dialog>
 
+    <dialog id="shortcutsDialog" class="dialog shortcuts-dialog">
+      <form method="dialog">
+        <header class="dialog-header">
+          <h2>Atajos de teclado</h2>
+          <button type="button" id="closeShortcutsButton" class="ghost-btn">Cerrar</button>
+        </header>
+        <ul class="shortcut-help-list">
+          <li><strong>/</strong> abrir busqueda</li>
+          <li><strong>Ctrl/Cmd + N</strong> nuevo tutorial</li>
+          <li><strong>?</strong> abrir esta ayuda</li>
+          <li><strong>Esc</strong> cerrar dialogos</li>
+        </ul>
+      </form>
+    </dialog>
+
     <template id="emptyStateTemplate">
       <div class="empty-state">
         <h3>No hay tutoriales en esta vista</h3>
-        <p>Crea tu primer tutorial con el botón "Nuevo tutorial".</p>
+        <p>Crea tu primer tutorial con el boton "Nuevo tutorial".</p>
       </div>
     </template>
 

@@ -31,20 +31,6 @@
         </section>
 
         <section class="sidebar-section">
-          <p class="section-title">Atajos</p>
-          <div class="shortcut-list">
-            <button type="button" class="shortcut" data-status-shortcut="Por ver">Por ver</button>
-            <button type="button" class="shortcut" data-status-shortcut="En progreso">En progreso</button>
-            <button type="button" class="shortcut" data-status-shortcut="Aplicado">Aplicado</button>
-          </div>
-        </section>
-
-        <section class="sidebar-section">
-          <p class="section-title">Colecciones inteligentes</p>
-          <div id="smartCollectionsList" class="shortcut-list"></div>
-        </section>
-
-        <section class="sidebar-section">
           <p class="section-title">Vistas guardadas</p>
           <button type="button" class="nav-item" id="saveCurrentViewButton">Guardar vista actual</button>
           <div id="savedViewsList" class="saved-views-list"></div>
@@ -112,36 +98,77 @@
                   <button type="button" class="ghost-btn view-switch-btn" data-view-target="table">Lista</button>
                   <button type="button" class="ghost-btn view-switch-btn" data-view-target="gallery">Galeria</button>
                 </div>
-                <button id="shortcutsButton" type="button" class="ghost-btn">Atajos</button>
                 <button id="newTutorialButton" class="primary-btn" type="button">+ Nuevo tutorial</button>
               </div>
             </header>
 
             <section class="stats-grid" id="statsGrid"></section>
 
+            <section class="library-filters" id="libraryFilters">
+              <div class="library-filter-chips" id="libraryQuickFilters" role="tablist" aria-label="Filtros rapidos">
+                <button type="button" class="filter-chip is-active" data-library-quick="all">Todo</button>
+                <button type="button" class="filter-chip" data-library-quick="por_ver">Por ver</button>
+                <button type="button" class="filter-chip" data-library-quick="en_progreso">En progreso</button>
+                <button type="button" class="filter-chip" data-library-quick="aplicado">Aplicado</button>
+                <button type="button" class="filter-chip" data-library-quick="favoritos">Favoritos</button>
+                <button type="button" class="filter-chip" data-library-quick="alta">Alta prioridad</button>
+              </div>
+
+              <div class="library-filter-tools">
+                <input
+                  id="librarySearchInput"
+                  class="library-search-inline"
+                  type="search"
+                  placeholder="Buscar por titulo..."
+                  autocomplete="off"
+                />
+                <details id="columnsMenu" class="columns-menu">
+                  <summary class="ghost-btn">Columnas</summary>
+                  <div class="columns-panel">
+                    <label class="column-option"><input type="checkbox" data-column-toggle="type" checked /> Tipo</label>
+                    <label class="column-option"><input type="checkbox" data-column-toggle="category" checked /> Categoria</label>
+                    <label class="column-option"><input type="checkbox" data-column-toggle="collection" checked /> Coleccion</label>
+                    <label class="column-option"><input type="checkbox" data-column-toggle="reviewDate" checked /> Repaso</label>
+                    <label class="column-option"><input type="checkbox" data-column-toggle="updatedAt" /> Actualizado</label>
+                  </div>
+                </details>
+              </div>
+            </section>
+
             <section id="bulkPanel" class="bulk-panel hidden">
               <p id="bulkCount" class="bulk-count">0 seleccionados</p>
               <div class="bulk-actions">
-                <button id="selectVisibleButton" type="button" class="ghost-btn">Seleccionar visibles</button>
-                <button id="clearSelectionButton" type="button" class="ghost-btn">Limpiar</button>
-                <select id="bulkStatusSelect">
-                  <option value="">Estado...</option>
-                  <option value="Por ver">Por ver</option>
-                  <option value="En progreso">En progreso</option>
-                  <option value="Aplicado">Aplicado</option>
-                  <option value="Archivado">Archivado</option>
-                </select>
-                <button id="applyBulkStatusButton" type="button" class="ghost-btn">Aplicar estado</button>
-                <select id="bulkPrioritySelect">
-                  <option value="">Prioridad...</option>
-                  <option value="Alta">Alta</option>
-                  <option value="Media">Media</option>
-                  <option value="Baja">Baja</option>
-                </select>
-                <button id="applyBulkPriorityButton" type="button" class="ghost-btn">Aplicar prioridad</button>
-                <button id="bulkFavoriteOnButton" type="button" class="ghost-btn">Favorito ON</button>
-                <button id="bulkFavoriteOffButton" type="button" class="ghost-btn">Favorito OFF</button>
-                <button id="bulkDeleteButton" type="button" class="ghost-btn danger-btn">Eliminar seleccion</button>
+                <button id="bulkDeleteButton" type="button" class="ghost-btn danger-btn">Eliminar</button>
+                <details class="row-menu bulk-more-menu">
+                  <summary class="menu-trigger" aria-label="Mas acciones">...</summary>
+                  <div class="row-menu-panel bulk-more-panel">
+                    <button id="selectVisibleButton" type="button" class="ghost-btn">Seleccionar visibles</button>
+                    <button id="clearSelectionButton" type="button" class="ghost-btn">Limpiar seleccion</button>
+                    <label class="menu-field">
+                      Estado
+                      <select id="bulkStatusSelect">
+                        <option value="">Estado...</option>
+                        <option value="Por ver">Por ver</option>
+                        <option value="En progreso">En progreso</option>
+                        <option value="Aplicado">Aplicado</option>
+                        <option value="Archivado">Archivado</option>
+                      </select>
+                    </label>
+                    <button id="applyBulkStatusButton" type="button" class="ghost-btn">Aplicar estado</button>
+                    <label class="menu-field">
+                      Prioridad
+                      <select id="bulkPrioritySelect">
+                        <option value="">Prioridad...</option>
+                        <option value="Alta">Alta</option>
+                        <option value="Media">Media</option>
+                        <option value="Baja">Baja</option>
+                      </select>
+                    </label>
+                    <button id="applyBulkPriorityButton" type="button" class="ghost-btn">Aplicar prioridad</button>
+                    <button id="bulkFavoriteOnButton" type="button" class="ghost-btn">Favorito ON</button>
+                    <button id="bulkFavoriteOffButton" type="button" class="ghost-btn">Favorito OFF</button>
+                  </div>
+                </details>
               </div>
             </section>
 
@@ -230,6 +257,7 @@
               <option value="updatedAt">Actualizacion</option>
               <option value="createdAt">Creacion</option>
               <option value="title">Titulo</option>
+              <option value="priority">Prioridad</option>
               <option value="reviewDate">Repaso</option>
             </select>
           </label>

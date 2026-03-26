@@ -3,6 +3,14 @@ const STATUS_ORDER = ["Por ver", "En progreso", "Aplicado", "Archivado"];
 const MAX_UPLOAD_SIZE_BYTES = 250 * 1024 * 1024;
 const TEXT_FILE_EXTENSIONS = [".txt", ".md", ".markdown"];
 const SMART_COLLECTION_KEYS = ["all", "due", "focus", "uncategorized", "duplicates"];
+const TABLE_COLUMN_KEYS = ["type", "category", "collection", "reviewDate", "updatedAt"];
+const DEFAULT_VISIBLE_COLUMNS = Object.freeze({
+  type: true,
+  category: true,
+  collection: true,
+  reviewDate: true,
+  updatedAt: false,
+});
 
 const state = {
   tutorials: [],
@@ -29,6 +37,7 @@ const state = {
   currentUser: null,
   authMode: "login",
   reminderPermission: typeof Notification !== "undefined" ? Notification.permission : "unsupported",
+  visibleColumns: { ...DEFAULT_VISIBLE_COLUMNS },
 };
 
 let uploadProgressTimer = null;
@@ -60,6 +69,9 @@ const refs = {
   saveCurrentViewButton: document.querySelector("#saveCurrentViewButton"),
   savedViewsList: document.querySelector("#savedViewsList"),
   smartCollectionsList: document.querySelector("#smartCollectionsList"),
+  librarySearchInput: document.querySelector("#librarySearchInput"),
+  libraryQuickButtons: Array.from(document.querySelectorAll("[data-library-quick]")),
+  columnToggleInputs: Array.from(document.querySelectorAll("[data-column-toggle]")),
   enableRemindersButton: document.querySelector("#enableRemindersButton"),
   statsGrid: document.querySelector("#statsGrid"),
   tableView: document.querySelector("#tableView"),
@@ -155,6 +167,26 @@ function bindEvents() {
     state.search = event.target.value.trim().toLowerCase();
     render();
   });
+  refs.librarySearchInput?.addEventListener("input", (event) => {
+    state.search = event.target.value.trim().toLowerCase();
+    refs.searchInput.value = state.search;
+    render();
+  });
+  refs.libraryQuickButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      applyLibraryQuickFilter(button.dataset.libraryQuick);
+    });
+  });
+  refs.columnToggleInputs.forEach((input) => {
+    input.addEventListener("change", () => {
+      const key = input.dataset.columnToggle;
+      if (!TABLE_COLUMN_KEYS.includes(key)) {
+        return;
+      }
+      state.visibleColumns[key] = input.checked;
+      render();
+    });
+  });
   refs.viewSelect.addEventListener("change", (event) => {
     state.view = normalizeView(event.target.value);
     refs.viewSelect.value = state.view;
@@ -214,8 +246,8 @@ function bindEvents() {
   refs.themeToggleButton.addEventListener("click", toggleTheme);
 
   refs.newTutorialButton.addEventListener("click", openDialogForCreate);
-  refs.shortcutsButton.addEventListener("click", openShortcutsDialog);
-  refs.closeShortcutsButton.addEventListener("click", () => refs.shortcutsDialog.close());
+  refs.shortcutsButton?.addEventListener("click", openShortcutsDialog);
+  refs.closeShortcutsButton?.addEventListener("click", () => refs.shortcutsDialog.close());
   refs.closeDialogButton.addEventListener("click", () => refs.dialog.close());
   refs.tutorialForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -238,7 +270,7 @@ function bindEvents() {
   refs.searchResults.addEventListener("click", (event) => void onActionClick(event));
   refs.duplicatePanel.addEventListener("click", (event) => void onDuplicatePanelAction(event));
   refs.savedViewsList.addEventListener("click", (event) => void onSavedViewAction(event));
-  refs.smartCollectionsList.addEventListener("click", (event) => onSmartCollectionAction(event));
+  refs.smartCollectionsList?.addEventListener("click", (event) => onSmartCollectionAction(event));
   refs.tableView.addEventListener("change", (event) => void onInlineFieldChange(event));
   refs.boardView.addEventListener("change", (event) => void onInlineFieldChange(event));
   refs.tableView.addEventListener("change", (event) => onSelectionChange(event));
@@ -385,11 +417,14 @@ function setAuthenticated(user) {
   state.selectedId = null;
   state.selectedIds = new Set();
   state.editingId = null;
+  state.visibleColumns = { ...DEFAULT_VISIBLE_COLUMNS };
   refs.tableView.innerHTML = "";
   refs.galleryView.innerHTML = "";
   refs.boardView.innerHTML = "";
   refs.savedViewsList.innerHTML = "";
-  refs.smartCollectionsList.innerHTML = "";
+  if (refs.smartCollectionsList) {
+    refs.smartCollectionsList.innerHTML = "";
+  }
   refs.sidebarTutorialsList.innerHTML = "";
   refs.reminderPanel.innerHTML = "";
   refs.reminderPanel.classList.add("hidden");
@@ -460,6 +495,11 @@ async function onActionClick(event) {
   const pageTarget = event.target.closest("[data-go-page]");
   if (pageTarget) {
     goToPage(pageTarget.dataset.goPage);
+    return;
+  }
+  const sortTarget = event.target.closest("[data-sort-by]");
+  if (sortTarget) {
+    toggleSort(sortTarget.dataset.sortBy);
     return;
   }
   const openTarget = event.target.closest("[data-open-id]");
@@ -688,6 +728,7 @@ function applySavedView(id) {
   state.updatedFrom = typeof filters.updatedFrom === "string" ? filters.updatedFrom : "";
   state.updatedTo = typeof filters.updatedTo === "string" ? filters.updatedTo : "";
   state.favoritesOnly = Boolean(filters.favoritesOnly);
+  state.visibleColumns = normalizeVisibleColumns(filters.visibleColumns);
   state.showAdvancedFilters = hasAdvancedFiltersApplied();
   state.smartCollection = normalizeSmartCollectionKey(filters.smartCollection);
 
@@ -769,16 +810,41 @@ function getCurrentFilterSnapshot() {
     updatedFrom: state.updatedFrom,
     updatedTo: state.updatedTo,
     favoritesOnly: state.favoritesOnly,
+    visibleColumns: { ...state.visibleColumns },
     smartCollection: state.smartCollection,
   };
 }
 
 function normalizeSortBy(value) {
-  return ["updatedAt", "createdAt", "title", "reviewDate"].includes(value) ? value : "updatedAt";
+  return ["updatedAt", "createdAt", "title", "type", "category", "collection", "priority", "reviewDate"].includes(
+    value
+  )
+    ? value
+    : "updatedAt";
 }
 
 function normalizeSortDirection(value) {
   return value === "asc" || value === "desc" ? value : "desc";
+}
+
+function defaultSortDirectionFor(by) {
+  if (by === "priority" || by === "updatedAt" || by === "createdAt") {
+    return "desc";
+  }
+  return "asc";
+}
+
+function toggleSort(sortBy) {
+  const normalized = normalizeSortBy(sortBy);
+  if (state.sortBy === normalized) {
+    state.sortDirection = state.sortDirection === "asc" ? "desc" : "asc";
+  } else {
+    state.sortBy = normalized;
+    state.sortDirection = defaultSortDirectionFor(normalized);
+  }
+  refs.sortBySelect.value = state.sortBy;
+  refs.sortDirectionSelect.value = state.sortDirection;
+  render();
 }
 
 function normalizeView(value) {
@@ -787,6 +853,19 @@ function normalizeView(value) {
 
 function normalizeSmartCollectionKey(value) {
   return SMART_COLLECTION_KEYS.includes(value) ? value : "all";
+}
+
+function normalizeVisibleColumns(value) {
+  const normalized = { ...DEFAULT_VISIBLE_COLUMNS };
+  if (!value || typeof value !== "object") {
+    return normalized;
+  }
+  TABLE_COLUMN_KEYS.forEach((key) => {
+    if (key in value) {
+      normalized[key] = Boolean(value[key]);
+    }
+  });
+  return normalized;
 }
 
 function getInitialTheme() {
@@ -903,6 +982,76 @@ function syncViewSwitchButtons() {
   });
 }
 
+function applyLibraryQuickFilter(key) {
+  const next = String(key || "all");
+  state.smartCollection = "all";
+  state.status = "all";
+  state.favoritesOnly = false;
+
+  if (next === "por_ver") {
+    state.status = "Por ver";
+  } else if (next === "en_progreso") {
+    state.status = "En progreso";
+  } else if (next === "aplicado") {
+    state.status = "Aplicado";
+  } else if (next === "favoritos") {
+    state.favoritesOnly = true;
+  } else if (next === "alta") {
+    state.priority = "Alta";
+  } else {
+    state.priority = "all";
+  }
+
+  if (next !== "alta") {
+    state.priority = "all";
+  }
+
+  refs.statusFilter.value = state.status;
+  refs.priorityFilter.value = state.priority;
+  refs.favoritesOnlyFilter.checked = state.favoritesOnly;
+  goToPage("library");
+}
+
+function getActiveLibraryQuickFilter() {
+  if (state.favoritesOnly && state.status === "all" && state.priority === "all") {
+    return "favoritos";
+  }
+  if (!state.favoritesOnly && state.priority === "Alta" && state.status === "all") {
+    return "alta";
+  }
+  if (state.status === "Por ver") {
+    return "por_ver";
+  }
+  if (state.status === "En progreso") {
+    return "en_progreso";
+  }
+  if (state.status === "Aplicado") {
+    return "aplicado";
+  }
+  return "all";
+}
+
+function syncLibraryFilters() {
+  if (refs.librarySearchInput) {
+    refs.librarySearchInput.value = state.search;
+  }
+
+  const activeQuick = getActiveLibraryQuickFilter();
+  refs.libraryQuickButtons.forEach((button) => {
+    const isActive = button.dataset.libraryQuick === activeQuick;
+    button.classList.toggle("is-active", isActive);
+    button.setAttribute("aria-pressed", isActive ? "true" : "false");
+  });
+
+  refs.columnToggleInputs.forEach((input) => {
+    const key = input.dataset.columnToggle;
+    if (!TABLE_COLUMN_KEYS.includes(key)) {
+      return;
+    }
+    input.checked = Boolean(state.visibleColumns[key]);
+  });
+}
+
 function openShortcutsDialog() {
   if (!refs.shortcutsDialog?.showModal) {
     return;
@@ -971,6 +1120,9 @@ function getSmartCollectionDefinitions() {
 }
 
 function renderSmartCollections() {
+  if (!refs.smartCollectionsList) {
+    return;
+  }
   if (!state.currentUser) {
     refs.smartCollectionsList.innerHTML = "";
     return;
@@ -1400,6 +1552,7 @@ function render() {
   renderSearchResults();
   syncPageVisibility();
   syncViewSwitchButtons();
+  syncLibraryFilters();
 
   if (state.page === "settings") {
     return;
@@ -1676,11 +1829,33 @@ function renderBoardLegacy(items) {
     </div>`;
 }
 
+function renderTableSortHeader(label, sortBy) {
+  const isActive = state.sortBy === sortBy;
+  const arrow = isActive ? (state.sortDirection === "asc" ? "↑" : "↓") : "";
+  return `
+    <button
+      type="button"
+      class="table-sort-btn ${isActive ? "is-active" : ""}"
+      data-sort-by="${sortBy}"
+      aria-label="Ordenar por ${label}"
+    >
+      <span>${label}</span>
+      ${arrow ? `<span class="table-sort-arrow">${arrow}</span>` : ""}
+    </button>
+  `;
+}
+
 function renderTable(items) {
   if (!items.length) {
     renderEmptyInto(refs.tableView);
     return;
   }
+
+  const showType = Boolean(state.visibleColumns.type);
+  const showCategory = Boolean(state.visibleColumns.category);
+  const showCollection = Boolean(state.visibleColumns.collection);
+  const showReviewDate = Boolean(state.visibleColumns.reviewDate);
+  const showUpdatedAt = Boolean(state.visibleColumns.updatedAt);
 
   refs.tableView.innerHTML = `
     <div class="table-wrap">
@@ -1697,11 +1872,13 @@ function renderTable(items) {
               />
             </th>
             <th>Fav</th>
-            <th>Titulo</th>
-            <th>Tipo</th>
-            <th>Categoria</th>
-            <th>Repaso</th>
-            <th class="menu-cell">Menu</th>
+            <th>${renderTableSortHeader("Titulo", "title")}</th>
+            ${showType ? `<th>${renderTableSortHeader("Tipo", "type")}</th>` : ""}
+            ${showCategory ? `<th>${renderTableSortHeader("Categoria", "category")}</th>` : ""}
+            ${showCollection ? `<th>${renderTableSortHeader("Coleccion", "collection")}</th>` : ""}
+            <th>${renderTableSortHeader("Prioridad", "priority")}</th>
+            ${showReviewDate ? `<th>${renderTableSortHeader("Repaso", "reviewDate")}</th>` : ""}
+            ${showUpdatedAt ? "<th>Actualizado</th>" : ""}
           </tr>
         </thead>
         <tbody>
@@ -1724,33 +1901,12 @@ function renderTable(items) {
                     </button>
                   </td>
                   <td><button type="button" class="link-cell" data-open-id="${t.id}">${escapeHtml(t.title)}</button></td>
-                  <td>${formatType(t.type)}</td>
-                  <td>${escapeHtml(t.category || "Sin categoria")}</td>
-                  <td>${escapeHtml(t.reviewDate || "-")}</td>
-                  <td class="menu-cell">
-                    <details class="row-menu">
-                      <summary class="menu-trigger" aria-label="Opciones para ${escapeAttribute(t.title)}">...</summary>
-                      <div class="row-menu-panel">
-                        <label class="menu-field">
-                          Estado
-                          <select class="inline-select" data-inline-field="status" data-inline-id="${t.id}">
-                            ${renderStatusOptions(t.status)}
-                          </select>
-                        </label>
-                        <label class="menu-field">
-                          Prioridad
-                          <select class="inline-select" data-inline-field="priority" data-inline-id="${t.id}">
-                            ${renderPriorityOptions(t.priority)}
-                          </select>
-                        </label>
-                        <div class="menu-actions">
-                          <button type="button" data-open-id="${t.id}">Abrir</button>
-                          <button type="button" data-edit-id="${t.id}">Editar</button>
-                          <button type="button" class="danger" data-delete-id="${t.id}">Eliminar</button>
-                        </div>
-                      </div>
-                    </details>
-                  </td>
+                  ${showType ? `<td>${formatType(t.type)}</td>` : ""}
+                  ${showCategory ? `<td>${escapeHtml(t.category || "Sin categoria")}</td>` : ""}
+                  ${showCollection ? `<td>${escapeHtml(t.collection || "Sin coleccion")}</td>` : ""}
+                  <td>${escapeHtml(t.priority || "-")}</td>
+                  ${showReviewDate ? `<td>${escapeHtml(t.reviewDate || "-")}</td>` : ""}
+                  ${showUpdatedAt ? `<td>${escapeHtml(formatListDate(t.updatedAt || t.createdAt))}</td>` : ""}
                 </tr>
               `
             )
@@ -2378,11 +2534,7 @@ function getFilteredTutorials() {
       if (!state.search) {
         return true;
       }
-      const haystack = [t.title, t.category, t.collection, t.notes, t.textContent, t.tags.join(" ")]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(state.search);
+      return String(t.title || "").toLowerCase().includes(state.search);
     })
     .sort(compareTutorialForSort);
 }
@@ -2392,7 +2544,19 @@ function compareTutorialForSort(left, right) {
   const by = state.sortBy;
 
   if (by === "title") {
-    return direction * String(left.title || "").localeCompare(String(right.title || ""), "es", { sensitivity: "base" });
+    return compareByTextValues(left.title, right.title, direction, left, right);
+  }
+
+  if (by === "type") {
+    return compareByTextValues(formatType(left.type), formatType(right.type), direction, left, right);
+  }
+
+  if (by === "category") {
+    return compareByTextValues(left.category, right.category, direction, left, right);
+  }
+
+  if (by === "collection") {
+    return compareByTextValues(left.collection, right.collection, direction, left, right);
   }
 
   if (by === "reviewDate") {
@@ -2414,6 +2578,14 @@ function compareTutorialForSort(left, right) {
     return compareByUpdated(left, right, direction);
   }
 
+  if (by === "priority") {
+    const diff = direction * (priorityRank(left.priority) - priorityRank(right.priority));
+    if (diff !== 0) {
+      return diff;
+    }
+    return compareByUpdated(left, right, direction);
+  }
+
   if (by === "createdAt") {
     const diff = compareByDate(left.createdAt, right.createdAt, direction);
     if (diff !== 0) {
@@ -2426,7 +2598,7 @@ function compareTutorialForSort(left, right) {
   if (diff !== 0) {
     return diff;
   }
-  return direction * String(left.title || "").localeCompare(String(right.title || ""), "es", { sensitivity: "base" });
+  return compareByTextValues(left.title, right.title, direction, left, right);
 }
 
 function compareByUpdated(left, right, direction) {
@@ -2451,12 +2623,55 @@ function compareByDate(leftValue, rightValue, direction) {
   return direction * (left - right);
 }
 
+function compareByTextValues(leftValue, rightValue, direction, left, right) {
+  const leftText = String(leftValue || "").trim();
+  const rightText = String(rightValue || "").trim();
+  if (!leftText && !rightText) {
+    return compareByUpdated(left, right, direction);
+  }
+  if (!leftText) {
+    return 1;
+  }
+  if (!rightText) {
+    return -1;
+  }
+
+  const diff = direction * leftText.localeCompare(rightText, "es", { sensitivity: "base" });
+  if (diff !== 0) {
+    return diff;
+  }
+  return compareByUpdated(left, right, direction);
+}
+
+function priorityRank(priority) {
+  if (priority === "Alta") {
+    return 3;
+  }
+  if (priority === "Media") {
+    return 2;
+  }
+  return 1;
+}
+
 function toDateKey(value) {
   const date = new Date(value || "");
   if (Number.isNaN(date.getTime())) {
     return "";
   }
   return date.toISOString().slice(0, 10);
+}
+
+function formatListDate(value) {
+  const date = new Date(value || "");
+  if (Number.isNaN(date.getTime())) {
+    return "-";
+  }
+  return date.toLocaleString("es-BO", {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function statusPillClass(status) {

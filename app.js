@@ -704,6 +704,11 @@ async function onActionClick(event) {
     openTutorialEditor(editTarget.dataset.editId);
     return;
   }
+  const openPropertiesEditTarget = event.target.closest("[data-open-properties-edit-id]");
+  if (openPropertiesEditTarget) {
+    openDialogForEdit(openPropertiesEditTarget.dataset.openPropertiesEditId);
+    return;
+  }
   const closeEditorTarget = event.target.closest("[data-close-tutorial-editor]");
   if (closeEditorTarget) {
     await flushPendingAutosaves();
@@ -711,10 +716,12 @@ async function onActionClick(event) {
     render();
     return;
   }
-  const toggleMiniMapTarget = event.target.closest("[data-toggle-editor-mini-map]");
-  if (toggleMiniMapTarget) {
-    state.editorMiniMapOpen = !state.editorMiniMapOpen;
-    render();
+  const miniNotesToggleTarget = event.target.closest("[data-mini-toggle-notes]");
+  if (miniNotesToggleTarget) {
+    if (!state.tutorialEditMode) {
+      return;
+    }
+    toggleNotesSide();
     return;
   }
   const addEditorTextTarget = event.target.closest("[data-editor-add-text-id]");
@@ -2747,7 +2754,6 @@ function renderTutorialViewerPanel() {
           </div>
         </div>
         <div class="detail-actions">
-          <button type="button" data-toggle-notes-side="1">${state.notesSide === "left" ? "Notas a la derecha" : "Notas a la izquierda"}</button>
           <button
             type="button"
             class="favorite-btn ${tutorial.isFavorite ? "is-on" : ""}"

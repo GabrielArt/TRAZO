@@ -476,6 +476,62 @@
       </form>
     </dialog>
 
+    <dialog id="extraMediaDialog" class="dialog extra-media-dialog">
+      <form id="extraMediaForm" method="dialog" novalidate>
+        <header class="dialog-header">
+          <h2 id="extraMediaTitle">Agregar contenido</h2>
+          <button type="button" id="closeExtraMediaButton" class="ghost-btn">Cerrar</button>
+        </header>
+
+        <div class="extra-media-mode" role="tablist" aria-label="Modo de carga">
+          <button type="button" class="ghost-btn is-active" data-extra-media-mode="url">URL</button>
+          <button type="button" class="ghost-btn" data-extra-media-mode="upload">Archivo</button>
+        </div>
+
+        <label id="extraMediaUrlField" class="full-width">
+          URL
+          <input id="extraMediaUrlInput" type="url" placeholder="https://..." />
+        </label>
+
+        <label id="extraMediaFileField" class="full-width hidden">
+          Archivo
+          <input id="extraMediaFileInput" type="file" accept="image/*,video/*" />
+        </label>
+
+        <label class="full-width">
+          Titulo (opcional)
+          <input id="extraMediaCaptionInput" type="text" placeholder="Ej: referencia visual" />
+        </label>
+
+        <label id="extraMediaTimestampsField" class="full-width hidden">
+          Timestamps (uno por linea)
+          <textarea
+            id="extraMediaTimestampsInput"
+            rows="4"
+            placeholder="00:12 Intro&#10;01:40 Punto clave&#10;05:20 Resumen"
+          ></textarea>
+        </label>
+
+        <p id="extraMediaStatus" class="upload-status"></p>
+
+        <footer class="dialog-footer">
+          <button type="button" class="ghost-btn" id="cancelExtraMediaButton">Cancelar</button>
+          <button type="submit" class="primary-btn" id="saveExtraMediaButton">Agregar</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="mediaPreviewDialog" class="dialog media-preview-dialog">
+      <form method="dialog" class="media-preview-body">
+        <header class="dialog-header">
+          <h2>Vista previa</h2>
+          <button type="button" id="closeMediaPreviewButton" class="ghost-btn">Cerrar</button>
+        </header>
+        <img id="mediaPreviewImage" alt="Vista previa del adjunto" />
+        <p id="mediaPreviewCaption" class="meta hidden"></p>
+      </form>
+    </dialog>
+
     <template id="emptyStateTemplate">
       <div class="empty-state">
         <h3>No hay tutoriales en esta vista</h3>

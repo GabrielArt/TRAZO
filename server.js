@@ -478,6 +478,7 @@ async function initializeDatabase() {
       tags TEXT NOT NULL DEFAULT '[]',
       notes TEXT NOT NULL DEFAULT '',
       timestamps TEXT NOT NULL DEFAULT '[]',
+      extra_content TEXT NOT NULL DEFAULT '[]',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )
@@ -485,6 +486,7 @@ async function initializeDatabase() {
 
   await ensureColumn("tutorials", "user_id", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn("tutorials", "is_favorite", "INTEGER NOT NULL DEFAULT 0");
+  await ensureColumn("tutorials", "extra_content", "TEXT NOT NULL DEFAULT '[]'");
 
   await runAsync(`
     CREATE TABLE IF NOT EXISTS saved_views (
@@ -658,6 +660,7 @@ function sanitizeTutorial(raw, now, userId) {
     tags: normalizeStringArray(raw.tags, 60, 40),
     notes: asTrimmedString(raw.notes).slice(0, 20000),
     timestamps: normalizeStringArray(raw.timestamps, 200, 120),
+    extraContent: normalizeExtraContent(raw.extraContent),
     createdAt: asTrimmedString(raw.createdAt) || now,
     updatedAt: asTrimmedString(raw.updatedAt) || now,
   };
@@ -682,6 +685,7 @@ function fromRow(row) {
     tags: safeJsonArray(row.tags),
     notes: row.notes,
     timestamps: safeJsonArray(row.timestamps),
+    extraContent: parseExtraContent(row.extra_content),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -691,8 +695,8 @@ function insertTutorial(tutorial) {
   return runAsync(
     `INSERT INTO tutorials (
       id, user_id, title, type, source, url, normalized_url, image_url, text_content, category,
-      collection, status, priority, is_favorite, review_date, tags, notes, timestamps, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      collection, status, priority, is_favorite, review_date, tags, notes, timestamps, extra_content, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       tutorial.id,
       tutorial.userId,
@@ -712,6 +716,7 @@ function insertTutorial(tutorial) {
       JSON.stringify(tutorial.tags),
       tutorial.notes,
       JSON.stringify(tutorial.timestamps),
+      JSON.stringify(tutorial.extraContent),
       tutorial.createdAt,
       tutorial.updatedAt,
     ]
@@ -723,7 +728,7 @@ function updateTutorial(tutorial) {
     `UPDATE tutorials
      SET title = ?, type = ?, source = ?, url = ?, normalized_url = ?, image_url = ?,
          text_content = ?, category = ?, collection = ?, status = ?, priority = ?, is_favorite = ?, review_date = ?,
-         tags = ?, notes = ?, timestamps = ?, updated_at = ?
+         tags = ?, notes = ?, timestamps = ?, extra_content = ?, updated_at = ?
      WHERE id = ? AND user_id = ?`,
     [
       tutorial.title,
@@ -742,6 +747,7 @@ function updateTutorial(tutorial) {
       JSON.stringify(tutorial.tags),
       tutorial.notes,
       JSON.stringify(tutorial.timestamps),
+      JSON.stringify(tutorial.extraContent),
       tutorial.updatedAt,
       tutorial.id,
       tutorial.userId,
@@ -865,6 +871,70 @@ function safeJsonArray(raw) {
   } catch {
     return [];
   }
+}
+
+function parseExtraContent(raw) {
+  try {
+    const parsed = JSON.parse(raw);
+    return normalizeExtraContent(parsed);
+  } catch {
+    return [];
+  }
+}
+
+function normalizeExtraContent(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map(normalizeExtraContentItem)
+    .filter(Boolean)
+    .slice(0, 60);
+}
+
+function normalizeExtraContentItem(item) {
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+  const type = asTrimmedString(item.type);
+  if (!["image", "video", "text"].includes(type)) {
+    return null;
+  }
+
+  const id = asTrimmedString(item.id) || crypto.randomUUID();
+  const caption = asTrimmedString(item.caption).slice(0, 160);
+  const note = typeof item.note === "string" ? item.note.slice(0, 20000) : "";
+  const createdAt = asTrimmedString(item.createdAt) || new Date().toISOString();
+
+  if (type === "text") {
+    const text = asTrimmedString(item.text).slice(0, 20000);
+    if (!text) {
+      return null;
+    }
+    return {
+      id,
+      type,
+      text,
+      caption,
+      note,
+      createdAt,
+    };
+  }
+
+  const url = asTrimmedString(item.url).slice(0, 2000);
+  if (!url) {
+    return null;
+  }
+  const timestamps = type === "video" ? normalizeStringArray(item.timestamps, 200, 120) : [];
+  return {
+    id,
+    type,
+    url,
+    caption,
+    note,
+    timestamps,
+    createdAt,
+  };
 }
 
 function normalizeEmail(value) {

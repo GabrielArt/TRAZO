@@ -31,9 +31,14 @@ const state = {
   showAdvancedFilters: false,
   smartCollection: "all",
   theme: getInitialTheme(),
+  notesSide: getInitialNotesSide(),
+  tutorialEditMode: false,
   editingId: null,
   selectedId: null,
   selectedIds: new Set(),
+  extraComposer: null,
+  extraMediaContext: null,
+  mediaCarouselIndexByTutorial: {},
   currentUser: null,
   authMode: "login",
   reminderPermission: typeof Notification !== "undefined" ? Notification.permission : "unsupported",
@@ -42,6 +47,12 @@ const state = {
 
 let uploadProgressTimer = null;
 let reminderIntervalId = null;
+let notesAutosaveTimer = null;
+let extraComposerAutosaveTimer = null;
+let isApplyingRoute = false;
+let activeDraggedExtraBlock = null;
+const extraBlockAutosaveTimers = new Map();
+const tutorialEditorAutosaveTimers = new Map();
 
 const refs = {
   appContent: document.querySelector("#appContent"),
@@ -131,6 +142,25 @@ const refs = {
   uploadInput: document.querySelector("#uploadInput"),
   uploadProgress: document.querySelector("#uploadProgress"),
   uploadStatus: document.querySelector("#uploadStatus"),
+  extraMediaDialog: document.querySelector("#extraMediaDialog"),
+  extraMediaForm: document.querySelector("#extraMediaForm"),
+  extraMediaTitle: document.querySelector("#extraMediaTitle"),
+  closeExtraMediaButton: document.querySelector("#closeExtraMediaButton"),
+  cancelExtraMediaButton: document.querySelector("#cancelExtraMediaButton"),
+  saveExtraMediaButton: document.querySelector("#saveExtraMediaButton"),
+  extraMediaModeButtons: Array.from(document.querySelectorAll("[data-extra-media-mode]")),
+  extraMediaUrlField: document.querySelector("#extraMediaUrlField"),
+  extraMediaUrlInput: document.querySelector("#extraMediaUrlInput"),
+  extraMediaFileField: document.querySelector("#extraMediaFileField"),
+  extraMediaFileInput: document.querySelector("#extraMediaFileInput"),
+  extraMediaCaptionInput: document.querySelector("#extraMediaCaptionInput"),
+  extraMediaTimestampsField: document.querySelector("#extraMediaTimestampsField"),
+  extraMediaTimestampsInput: document.querySelector("#extraMediaTimestampsInput"),
+  extraMediaStatus: document.querySelector("#extraMediaStatus"),
+  mediaPreviewDialog: document.querySelector("#mediaPreviewDialog"),
+  mediaPreviewImage: document.querySelector("#mediaPreviewImage"),
+  mediaPreviewCaption: document.querySelector("#mediaPreviewCaption"),
+  closeMediaPreviewButton: document.querySelector("#closeMediaPreviewButton"),
 };
 
 void init();
@@ -165,7 +195,6 @@ function bindEvents() {
 
   refs.searchInput.addEventListener("input", (event) => {
     state.search = event.target.value.trim().toLowerCase();
-    render();
   });
   refs.librarySearchInput?.addEventListener("input", (event) => {
     state.search = event.target.value.trim().toLowerCase();
@@ -254,11 +283,44 @@ function bindEvents() {
     void upsertTutorialFromForm();
   });
   refs.deleteButton.addEventListener("click", () => void deleteEditingTutorial());
+  refs.closeExtraMediaButton?.addEventListener("click", closeExtraMediaDialog);
+  refs.cancelExtraMediaButton?.addEventListener("click", closeExtraMediaDialog);
+  refs.extraMediaForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void saveExtraMediaFromDialog();
+  });
+  refs.extraMediaModeButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      setExtraMediaDialogMode(button.dataset.extraMediaMode);
+    });
+  });
+  refs.extraMediaFileInput?.addEventListener("change", () => {
+    const files = Array.from(refs.extraMediaFileInput.files || []);
+    if (!files.length) {
+      refs.extraMediaStatus.textContent = "";
+    } else if (files.length === 1) {
+      refs.extraMediaStatus.textContent = `Archivo seleccionado: ${files[0].name}`;
+    } else {
+      refs.extraMediaStatus.textContent = `${files.length} archivos seleccionados`;
+    }
+  });
+  refs.closeMediaPreviewButton?.addEventListener("click", closeMediaPreviewDialog);
+  refs.mediaPreviewDialog?.addEventListener("click", (event) => {
+    if (event.target === refs.mediaPreviewDialog) {
+      closeMediaPreviewDialog();
+    }
+  });
 
   refs.tableView.addEventListener("click", (event) => void onActionClick(event));
   refs.galleryView.addEventListener("click", (event) => void onActionClick(event));
   refs.boardView.addEventListener("click", (event) => void onActionClick(event));
   refs.tutorialPage.addEventListener("click", (event) => void onActionClick(event));
+  refs.tutorialPage.addEventListener("input", (event) => onTutorialPageInput(event));
+  refs.tutorialPage.addEventListener("change", (event) => onTutorialPageInput(event));
+  refs.tutorialPage.addEventListener("dragstart", (event) => onTutorialPageDragStart(event));
+  refs.tutorialPage.addEventListener("dragover", (event) => onTutorialPageDragOver(event));
+  refs.tutorialPage.addEventListener("drop", (event) => void onTutorialPageDrop(event));
+  refs.tutorialPage.addEventListener("dragend", () => onTutorialPageDragEnd());
   refs.settingsPage.addEventListener("click", (event) => {
     if (event.target === refs.settingsPage) {
       goToPage("library");
@@ -322,6 +384,36 @@ function bindEvents() {
     refs.uploadDropZone.classList.remove("is-dragging");
     void handlePickedFile(event.dataTransfer?.files?.[0] || null);
   });
+  window.addEventListener("popstate", () => {
+    if (!state.currentUser || isApplyingRoute) {
+      return;
+    }
+    applyRouteFromLocation();
+  });
+  window.addEventListener("hashchange", () => {
+    if (!state.currentUser || isApplyingRoute) {
+      return;
+    }
+    applyRouteFromLocation();
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+      void flushPendingAutosaves();
+    }
+  });
+  window.addEventListener("resize", () => {
+    if (!state.currentUser || state.page !== "tutorial" || !state.selectedId) {
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      syncDetailEditorsLayout(state.selectedId);
+    });
+  });
+  window.addEventListener("beforeunload", () => {
+    if (state.extraComposer?.type === "text") {
+      persistLiveTextDraft(state.extraComposer.tutorialId, state.extraComposer);
+    }
+  });
   document.addEventListener("keydown", onGlobalKeydown);
 }
 
@@ -339,17 +431,99 @@ async function bootstrapSession() {
   }
 }
 
+function parseRouteFromLocation() {
+  const rawHash = String(window.location.hash || "").replace(/^#\/?/, "");
+  if (!rawHash) {
+    return { page: "library", tutorialId: "" };
+  }
+  const [pageSegment, ...rest] = rawHash.split("/");
+  const page = String(pageSegment || "").toLowerCase();
+  const tutorialRawId = rest.join("/");
+  let tutorialId = "";
+  if (tutorialRawId) {
+    try {
+      tutorialId = decodeURIComponent(tutorialRawId);
+    } catch {
+      tutorialId = tutorialRawId;
+    }
+  }
+
+  if (page === "settings") {
+    return { page: "settings", tutorialId: "" };
+  }
+  if (page === "tutorial") {
+    return { page: "tutorial", tutorialId };
+  }
+  return { page: "library", tutorialId: "" };
+}
+
+function buildRouteHash() {
+  if (state.page === "settings") {
+    return "#/settings";
+  }
+  if (state.page === "tutorial" && state.selectedId) {
+    return `#/tutorial/${encodeURIComponent(state.selectedId)}`;
+  }
+  return "#/library";
+}
+
+function syncRouteToLocation(replace = false) {
+  if (!state.currentUser || isApplyingRoute) {
+    return;
+  }
+  const nextHash = buildRouteHash();
+  if (window.location.hash === nextHash) {
+    return;
+  }
+  const nextUrl = `${window.location.pathname}${window.location.search}${nextHash}`;
+  if (replace) {
+    window.history.replaceState(null, "", nextUrl);
+  } else {
+    window.history.pushState(null, "", nextUrl);
+  }
+}
+
+function applyRouteFromLocation() {
+  if (!state.currentUser) {
+    return;
+  }
+  const route = parseRouteFromLocation();
+  isApplyingRoute = true;
+  if (route.page === "settings") {
+    state.page = "settings";
+    state.tutorialEditMode = false;
+  } else if (route.page === "tutorial") {
+    if (route.tutorialId) {
+      state.selectedId = route.tutorialId;
+    }
+    state.page = state.selectedId ? "tutorial" : "library";
+    state.tutorialEditMode = false;
+  } else {
+    state.page = "library";
+    state.tutorialEditMode = false;
+  }
+  isApplyingRoute = false;
+  closeSearchDialog();
+  render();
+}
+
 function goToPage(page) {
   if (!state.currentUser) {
     return;
   }
+  void flushPendingAutosaves();
   const next = page === "settings" || page === "tutorial" ? page : "library";
   if (next === "tutorial" && !state.selectedId) {
     state.page = "library";
+    state.tutorialEditMode = false;
   } else {
     state.page = next;
+    if (next !== "tutorial") {
+      state.tutorialEditMode = false;
+    }
   }
   closeSearchDialog();
+  syncRouteToLocation();
   render();
 }
 
@@ -402,10 +576,22 @@ function setAuthenticated(user) {
   refs.appContent.classList.toggle("hidden", !ok);
   refs.logoutButton.classList.toggle("hidden", !ok);
   if (ok) {
-    state.page = "library";
     refs.userBadge.textContent = user.email;
+    const route = parseRouteFromLocation();
+    if (route.page === "settings") {
+      state.page = "settings";
+      state.tutorialEditMode = false;
+    } else if (route.page === "tutorial") {
+      state.page = "tutorial";
+      state.selectedId = route.tutorialId || state.selectedId;
+      state.tutorialEditMode = false;
+    } else {
+      state.page = "library";
+      state.tutorialEditMode = false;
+    }
     refs.detailPanel.classList.remove("hidden");
     updateReminderButton();
+    syncRouteToLocation(true);
     syncPageVisibility();
     return;
   }
@@ -415,7 +601,10 @@ function setAuthenticated(user) {
   state.savedViews = [];
   state.smartCollection = "all";
   state.selectedId = null;
+  state.tutorialEditMode = false;
   state.selectedIds = new Set();
+  state.extraComposer = null;
+  state.extraMediaContext = null;
   state.editingId = null;
   state.visibleColumns = { ...DEFAULT_VISIBLE_COLUMNS };
   refs.tableView.innerHTML = "";
@@ -431,6 +620,8 @@ function setAuthenticated(user) {
   refs.duplicatePanel.innerHTML = "";
   refs.duplicatePanel.classList.add("hidden");
   refs.detailPanel.innerHTML = "";
+  closeExtraMediaDialog();
+  clearAutosaveTimers();
   closeSearchDialog();
   syncPageVisibility();
   stopReminderLoop();
@@ -509,7 +700,19 @@ async function onActionClick(event) {
   }
   const editTarget = event.target.closest("[data-edit-id]");
   if (editTarget) {
-    openDialogForEdit(editTarget.dataset.editId);
+    openTutorialEditor(editTarget.dataset.editId);
+    return;
+  }
+  const closeEditorTarget = event.target.closest("[data-close-tutorial-editor]");
+  if (closeEditorTarget) {
+    await flushPendingAutosaves();
+    state.tutorialEditMode = false;
+    render();
+    return;
+  }
+  const addEditorTextTarget = event.target.closest("[data-editor-add-text-id]");
+  if (addEditorTextTarget) {
+    await addEditorTextBlock(addEditorTextTarget.dataset.editorAddTextId);
     return;
   }
   const openUrlTarget = event.target.closest("[data-open-url]");
@@ -520,6 +723,86 @@ async function onActionClick(event) {
   const favoriteTarget = event.target.closest("[data-toggle-favorite]");
   if (favoriteTarget) {
     await toggleFavorite(favoriteTarget.dataset.toggleFavorite);
+    return;
+  }
+  const toggleNotesSideTarget = event.target.closest("[data-toggle-notes-side]");
+  if (toggleNotesSideTarget) {
+    toggleNotesSide();
+    return;
+  }
+  const mediaPreviewTarget = event.target.closest("[data-open-media-preview]");
+  if (mediaPreviewTarget) {
+    openMediaPreviewDialog(
+      mediaPreviewTarget.dataset.openMediaPreview,
+      mediaPreviewTarget.dataset.openMediaCaption || "",
+      mediaPreviewTarget.dataset.openMediaAlt || ""
+    );
+    return;
+  }
+  const carouselPrevTarget = event.target.closest("[data-carousel-prev-id]");
+  if (carouselPrevTarget) {
+    shiftMediaCarousel(carouselPrevTarget.dataset.carouselPrevId, -1);
+    return;
+  }
+  const carouselNextTarget = event.target.closest("[data-carousel-next-id]");
+  if (carouselNextTarget) {
+    shiftMediaCarousel(carouselNextTarget.dataset.carouselNextId, 1);
+    return;
+  }
+  const carouselJumpTarget = event.target.closest("[data-carousel-jump-id]");
+  if (carouselJumpTarget) {
+    const tutorialId = carouselJumpTarget.dataset.carouselJumpId;
+    const index = Number(carouselJumpTarget.dataset.carouselJumpIndex);
+    setMediaCarouselIndex(tutorialId, Number.isFinite(index) ? index : 0);
+    render();
+    return;
+  }
+  const videoJumpTarget = event.target.closest("[data-video-jump-id]");
+  if (videoJumpTarget) {
+    jumpExtraVideoToTimestamp(videoJumpTarget.dataset.videoJumpId, videoJumpTarget.dataset.videoJumpSeconds);
+    return;
+  }
+  const saveExtraTarget = event.target.closest("[data-save-extra-content]");
+  if (saveExtraTarget) {
+    await saveExtraContentComposer(saveExtraTarget.dataset.saveExtraContent);
+    return;
+  }
+  const closeComposerTarget = event.target.closest("[data-close-extra-composer]");
+  if (closeComposerTarget) {
+    closeExtraContentComposer();
+    return;
+  }
+  const cancelExtraTarget = event.target.closest("[data-cancel-extra-content]");
+  if (cancelExtraTarget) {
+    closeExtraContentComposer();
+    return;
+  }
+  const discardComposerTarget = event.target.closest("[data-discard-extra-composer]");
+  if (discardComposerTarget) {
+    await discardExtraContentComposer(discardComposerTarget.dataset.discardExtraComposer);
+    return;
+  }
+  const addExtraTarget = event.target.closest("[data-add-content-type]");
+  if (addExtraTarget) {
+    const details = addExtraTarget.closest("details");
+    if (details) {
+      details.open = false;
+    }
+    openExtraContentComposer(addExtraTarget.dataset.addContentId, addExtraTarget.dataset.addContentType);
+    return;
+  }
+  const moveExtraTarget = event.target.closest("[data-move-extra-id]");
+  if (moveExtraTarget) {
+    await moveExtraContentBlock(
+      moveExtraTarget.dataset.moveExtraId,
+      moveExtraTarget.dataset.moveContentBlockId,
+      Number(moveExtraTarget.dataset.moveDirection || 0)
+    );
+    return;
+  }
+  const removeExtraTarget = event.target.closest("[data-remove-extra-id]");
+  if (removeExtraTarget) {
+    await removeExtraContentBlock(removeExtraTarget.dataset.removeExtraId, removeExtraTarget.dataset.removeContentBlockId);
     return;
   }
   const deleteTarget = event.target.closest("[data-delete-id]");
@@ -543,6 +826,282 @@ async function onActionClick(event) {
     await refreshTutorials();
   } catch (error) {
     showOperationError(error, "No se pudo eliminar el tutorial.");
+  }
+}
+
+function onTutorialPageInput(event) {
+  if (state.tutorialEditMode) {
+    const primaryField = event.target?.closest?.("[data-editor-primary-field]");
+    if (primaryField) {
+      if (primaryField instanceof HTMLTextAreaElement) {
+        autoGrowTextarea(primaryField, 88);
+      }
+      if (state.selectedId) {
+        scheduleTutorialEditorPrimarySave(state.selectedId, primaryField.dataset.editorPrimaryField, primaryField.value);
+      }
+      return;
+    }
+    const extraField = event.target?.closest?.("[data-editor-extra-field]");
+    if (extraField) {
+      if (extraField instanceof HTMLTextAreaElement) {
+        autoGrowTextarea(extraField, 88);
+      }
+      const tutorialId = extraField.dataset.editorExtraTutorialId;
+      const blockId = extraField.dataset.editorExtraBlockId;
+      const field = extraField.dataset.editorExtraField;
+      if (tutorialId && blockId && field) {
+        scheduleTutorialEditorExtraSave(tutorialId, blockId, field, extraField.value);
+      }
+      return;
+    }
+  }
+
+  const notesField = event.target?.closest?.("[data-notes-editor-id]");
+  if (notesField instanceof HTMLTextAreaElement) {
+    const tutorial = state.tutorials.find((item) => item.id === notesField.dataset.notesEditorId);
+    if (tutorial?.type === "text") {
+      notesField.style.removeProperty("height");
+      notesField.style.removeProperty("max-height");
+      notesField.style.removeProperty("min-height");
+      notesField.style.overflowY = "hidden";
+      autoGrowTextarea(notesField, 92);
+    } else {
+      syncPrimaryNotesHeight(notesField);
+    }
+    scheduleNotesAutosave(notesField.dataset.notesEditorId, notesField.value);
+    if (state.selectedId) {
+      syncDetailEditorsLayout(state.selectedId);
+    }
+    return;
+  }
+
+  const mediaNoteField = event.target?.closest?.("[data-extra-block-note-id]");
+  if (mediaNoteField instanceof HTMLTextAreaElement) {
+    const tutorialId = mediaNoteField.dataset.extraBlockTutorialId;
+    const blockId = mediaNoteField.dataset.extraBlockNoteId;
+    if (tutorialId && blockId) {
+      scheduleExtraBlockFieldAutosave(tutorialId, blockId, "note", mediaNoteField.value);
+    }
+    syncExtraModuleNotesHeights();
+    return;
+  }
+
+  const field = event.target?.closest?.("[data-extra-field]");
+  if (!field || !state.extraComposer) {
+    return;
+  }
+  const key = field.dataset.extraField;
+  if (!["url", "text", "caption"].includes(key)) {
+    return;
+  }
+  state.extraComposer[key] = field.value;
+  if (state.extraComposer.type === "text") {
+    persistLiveTextDraft(state.extraComposer.tutorialId, state.extraComposer);
+  }
+  if (key === "text" && field instanceof HTMLTextAreaElement) {
+    autoGrowTextarea(field, 120);
+  }
+  if (state.extraComposer.type === "text") {
+    scheduleExtraComposerAutosave(state.extraComposer.tutorialId);
+  }
+}
+
+function findExtraModuleElement(target) {
+  return target?.closest?.("[data-extra-module-id]") || null;
+}
+
+function onTutorialPageDragStart(event) {
+  if (!state.tutorialEditMode) {
+    return;
+  }
+  const dragHandle = event.target?.closest?.("[data-extra-drag-handle]");
+  if (!dragHandle) {
+    event.preventDefault();
+    return;
+  }
+  const module = findExtraModuleElement(dragHandle);
+  if (!(module instanceof HTMLElement)) {
+    return;
+  }
+  const tutorialId = module.dataset.extraModuleTutorialId;
+  const blockId = module.dataset.extraModuleId;
+  if (!tutorialId || !blockId) {
+    return;
+  }
+  activeDraggedExtraBlock = { tutorialId, blockId };
+  module.classList.add("is-dragging");
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", blockId);
+  }
+}
+
+function onTutorialPageDragOver(event) {
+  if (!state.tutorialEditMode) {
+    return;
+  }
+  if (!activeDraggedExtraBlock) {
+    return;
+  }
+  const target = findExtraModuleElement(event.target);
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+  const targetBlockId = target.dataset.extraModuleId;
+  if (!targetBlockId || targetBlockId === activeDraggedExtraBlock.blockId) {
+    return;
+  }
+  event.preventDefault();
+  clearExtraModuleDropState();
+  target.classList.add("is-drop-target");
+}
+
+async function onTutorialPageDrop(event) {
+  if (!state.tutorialEditMode) {
+    return;
+  }
+  if (!activeDraggedExtraBlock) {
+    return;
+  }
+  const target = findExtraModuleElement(event.target);
+  if (!(target instanceof HTMLElement)) {
+    onTutorialPageDragEnd();
+    return;
+  }
+  const targetBlockId = target.dataset.extraModuleId;
+  if (!targetBlockId || targetBlockId === activeDraggedExtraBlock.blockId) {
+    onTutorialPageDragEnd();
+    return;
+  }
+  event.preventDefault();
+  await reorderExtraBlocks(activeDraggedExtraBlock.tutorialId, activeDraggedExtraBlock.blockId, targetBlockId);
+  onTutorialPageDragEnd();
+}
+
+function onTutorialPageDragEnd() {
+  activeDraggedExtraBlock = null;
+  clearExtraModuleDropState();
+}
+
+function clearExtraModuleDropState() {
+  refs.detailPanel.querySelectorAll(".is-dragging, .is-drop-target").forEach((element) => {
+    element.classList.remove("is-dragging", "is-drop-target");
+  });
+}
+
+async function reorderExtraBlocksLegacy(tutorialId, draggingBlockId, targetBlockId) {
+  if (!tutorialId || !draggingBlockId || !targetBlockId) {
+    return;
+  }
+  const tutorial = state.tutorials.find((item) => item.id === tutorialId);
+  if (!tutorial) {
+    return;
+  }
+  const blocks = normalizeExtraContentBlocks(tutorial.extraContent);
+  const fromIndex = blocks.findIndex((block) => block.id === draggingBlockId);
+  const toIndex = blocks.findIndex((block) => block.id === targetBlockId);
+  if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) {
+    return;
+  }
+
+  const nextBlocks = [...blocks];
+  const [moving] = nextBlocks.splice(fromIndex, 1);
+  const insertionIndex = fromIndex < toIndex ? toIndex - 1 : toIndex;
+  nextBlocks.splice(insertionIndex, 0, moving);
+  const updatedAt = new Date().toISOString();
+  const payload = {
+    ...tutorial,
+    extraContent: normalizeExtraContentBlocks(nextBlocks),
+    updatedAt,
+  };
+  try {
+    await apiUpdateTutorial(tutorialId, payload);
+    tutorial.extraContent = payload.extraContent;
+    tutorial.updatedAt = updatedAt;
+    setSyncStatus(`Orden actualizado · ${new Date().toLocaleTimeString("es-BO", { hour: "2-digit", minute: "2-digit" })}`);
+    render();
+  } catch (error) {
+    showOperationError(error, "No se pudo reordenar los modulos.");
+  }
+}
+
+async function reorderExtraBlocks(tutorialId, draggingBlockId, targetBlockId) {
+  if (!tutorialId || !draggingBlockId || !targetBlockId) {
+    return;
+  }
+  const tutorial = state.tutorials.find((item) => item.id === tutorialId);
+  if (!tutorial) {
+    return;
+  }
+  const blocks = normalizeExtraContentBlocks(tutorial.extraContent);
+  const fromIndex = blocks.findIndex((block) => block.id === draggingBlockId);
+  const toIndex = blocks.findIndex((block) => block.id === targetBlockId);
+  if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) {
+    return;
+  }
+
+  const nextBlocks = [...blocks];
+  const [moving] = nextBlocks.splice(fromIndex, 1);
+  const insertionIndex = fromIndex < toIndex ? toIndex - 1 : toIndex;
+  nextBlocks.splice(insertionIndex, 0, moving);
+
+  const updatedAt = new Date().toISOString();
+  const payload = {
+    ...tutorial,
+    extraContent: normalizeExtraContentBlocks(nextBlocks),
+    updatedAt,
+  };
+  try {
+    await apiUpdateTutorial(tutorialId, payload);
+    tutorial.extraContent = payload.extraContent;
+    tutorial.updatedAt = updatedAt;
+    setSyncStatus(`Orden actualizado · ${new Date().toLocaleTimeString("es-BO", { hour: "2-digit", minute: "2-digit" })}`);
+    render();
+  } catch (error) {
+    showOperationError(error, "No se pudo reordenar los modulos.");
+  }
+}
+
+async function moveExtraContentBlock(tutorialId, blockId, direction) {
+  if (!tutorialId || !blockId) {
+    return;
+  }
+  const shift = Number(direction);
+  if (!Number.isFinite(shift) || shift === 0) {
+    return;
+  }
+  const tutorial = state.tutorials.find((item) => item.id === tutorialId);
+  if (!tutorial) {
+    return;
+  }
+  const blocks = normalizeExtraContentBlocks(tutorial.extraContent);
+  const currentIndex = blocks.findIndex((block) => block.id === blockId);
+  if (currentIndex < 0) {
+    return;
+  }
+  const targetIndex = Math.max(0, Math.min(blocks.length - 1, currentIndex + (shift > 0 ? 1 : -1)));
+  if (targetIndex === currentIndex) {
+    return;
+  }
+
+  const nextBlocks = [...blocks];
+  const [moving] = nextBlocks.splice(currentIndex, 1);
+  nextBlocks.splice(targetIndex, 0, moving);
+
+  const updatedAt = new Date().toISOString();
+  const payload = {
+    ...tutorial,
+    extraContent: normalizeExtraContentBlocks(nextBlocks),
+    updatedAt,
+  };
+  try {
+    await apiUpdateTutorial(tutorialId, payload);
+    tutorial.extraContent = payload.extraContent;
+    tutorial.updatedAt = updatedAt;
+    setSyncStatus(`Orden actualizado · ${new Date().toLocaleTimeString("es-BO", { hour: "2-digit", minute: "2-digit" })}`);
+    render();
+  } catch (error) {
+    showOperationError(error, "No se pudo mover el bloque.");
   }
 }
 
@@ -881,6 +1440,16 @@ function getInitialTheme() {
   return "light";
 }
 
+function getInitialNotesSide() {
+  try {
+    const saved = localStorage.getItem("tv_notes_side");
+    if (saved === "left" || saved === "right") {
+      return saved;
+    }
+  } catch {}
+  return "right";
+}
+
 function applyTheme(theme) {
   state.theme = theme === "dark" ? "dark" : "light";
   document.body.dataset.theme = state.theme;
@@ -892,6 +1461,17 @@ function applyTheme(theme) {
 
 function toggleTheme() {
   applyTheme(state.theme === "dark" ? "light" : "dark");
+}
+
+function toggleNotesSide() {
+  if (state.tutorialEditMode) {
+    void flushPendingAutosaves();
+  }
+  state.notesSide = state.notesSide === "left" ? "right" : "left";
+  try {
+    localStorage.setItem("tv_notes_side", state.notesSide);
+  } catch {}
+  render();
 }
 
 function updateThemeToggleLabel() {
@@ -1535,7 +2115,20 @@ function selectTutorial(id) {
   if (!id) {
     return;
   }
+  void flushPendingAutosaves();
   state.selectedId = id;
+  state.tutorialEditMode = false;
+  closeSearchDialog();
+  goToPage("tutorial");
+}
+
+function openTutorialEditor(id) {
+  if (!id) {
+    return;
+  }
+  void flushPendingAutosaves();
+  state.selectedId = id;
+  state.tutorialEditMode = true;
   closeSearchDialog();
   goToPage("tutorial");
 }
@@ -1559,7 +2152,11 @@ function render() {
   }
 
   if (state.page === "tutorial") {
-    renderDetailPanel();
+    if (state.tutorialEditMode) {
+      renderTutorialEditorPanel();
+    } else {
+      renderTutorialViewerPanel();
+    }
     return;
   }
 
@@ -1781,6 +2378,9 @@ function renderGalleryLegacy(items) {
     tableActions.className = "menu-actions";
     panel.append(tableActions);
     details.append(summary, panel);
+    details.addEventListener("toggle", () => {
+      card.classList.toggle("menu-open", details.open);
+    });
 
     const head = document.createElement("div");
     head.className = "card-head";
@@ -2072,7 +2672,413 @@ function renderBoard(items) {
     </div>`;
 }
 
-function renderDetailPanel() {
+function getActiveTutorialForDetail() {
+  if (!state.currentUser || !state.tutorials.length) {
+    return null;
+  }
+  let tutorial = state.tutorials.find((item) => item.id === state.selectedId);
+  if (!tutorial) {
+    tutorial = state.tutorials[0];
+    state.selectedId = tutorial?.id || null;
+    syncRouteToLocation(true);
+  }
+  return tutorial || null;
+}
+
+function renderTutorialViewerPanel() {
+  const tutorial = getActiveTutorialForDetail();
+  if (!tutorial) {
+    refs.detailPanel.innerHTML = `
+      <div class="empty-state">
+        <h3>No hay tutoriales para abrir</h3>
+        <p>Vuelve a la biblioteca para crear tu primer tutorial.</p>
+      </div>
+    `;
+    return;
+  }
+
+  const sourceLabel = escapeHtml(formatSource(tutorial.source || "manual"));
+  const sourceValue = tutorial.url
+    ? `<a href="${escapeAttribute(tutorial.url)}" target="_blank" rel="noreferrer">${sourceLabel}</a>`
+    : sourceLabel;
+  const tsHtml = tutorial.timestamps.length
+    ? `<ul class="timestamp-list">${tutorial.timestamps.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>`
+    : `<p class="empty-side">Sin timestamps</p>`;
+  const createdAt = new Date(tutorial.createdAt || Date.now()).toLocaleString("es-BO");
+  const updatedAt = new Date(tutorial.updatedAt || tutorial.createdAt || Date.now()).toLocaleString("es-BO");
+  const reviewValue = tutorial.reviewDate || "Sin fecha";
+  const showStudyMeta = tutorial.type !== "image";
+  const notesHtml = tutorial.notes ? nl2br(escapeHtml(tutorial.notes)) : `<span class="empty-side">Sin notas</span>`;
+  const extraBlocksHtml = renderExtraMediaReadOnlySection(tutorial);
+
+  refs.detailPanel.innerHTML = `
+    <article class="detail-layout">
+      <header class="detail-header">
+        <div class="detail-heading">
+          <p class="detail-kicker">Pagina de tutorial</p>
+          <h2 class="detail-title">${escapeHtml(tutorial.title)}</h2>
+          <div class="detail-badges">
+            <span class="pill ${statusPillClass(tutorial.status)}">${escapeHtml(tutorial.status)}</span>
+            <span class="tag">${formatType(tutorial.type)}</span>
+            <span class="tag">${escapeHtml(tutorial.category || "Sin categoria")}</span>
+            <span class="tag">${escapeHtml(tutorial.priority)}</span>
+          </div>
+        </div>
+        <div class="detail-actions">
+          <button type="button" data-toggle-notes-side="1">${state.notesSide === "left" ? "Notas a la derecha" : "Notas a la izquierda"}</button>
+          <button
+            type="button"
+            class="favorite-btn ${tutorial.isFavorite ? "is-on" : ""}"
+            data-toggle-favorite="${tutorial.id}"
+            title="Favorito"
+          >
+            ${tutorial.isFavorite ? "&#9733;" : "&#9734;"}
+          </button>
+          <button type="button" data-edit-id="${tutorial.id}">Editar</button>
+        </div>
+      </header>
+
+      <section class="detail-properties-grid">
+        <article class="detail-property-card">
+          <span class="tutorial-property-label">Creado</span>
+          <span class="tutorial-property-value">${escapeHtml(createdAt)}</span>
+        </article>
+        <article class="detail-property-card">
+          <span class="tutorial-property-label">Actualizado</span>
+          <span class="tutorial-property-value">${escapeHtml(updatedAt)}</span>
+        </article>
+        <article class="detail-property-card">
+          <span class="tutorial-property-label">Coleccion</span>
+          <span class="tutorial-property-value">${escapeHtml(tutorial.collection || "Sin coleccion")}</span>
+        </article>
+        <article class="detail-property-card">
+          <span class="tutorial-property-label">Fuente</span>
+          <span class="tutorial-property-value">${sourceValue}</span>
+        </article>
+      </section>
+
+      <section class="detail-content-grid ${state.notesSide === "left" ? "is-notes-left" : ""}">
+        <div class="detail-media-area">
+          <div class="media-frame">${renderDetailMedia(tutorial)}</div>
+        </div>
+        <aside class="detail-side ${showStudyMeta ? "" : "detail-side--notes-only"}">
+          <section class="detail-side-card">
+            <h4>Notas</h4>
+            <div class="detail-note-body">${notesHtml}</div>
+          </section>
+          ${
+            showStudyMeta
+              ? `
+                <section class="detail-side-card">
+                  <h4>Timestamps</h4>
+                  ${tsHtml}
+                </section>
+                <section class="detail-side-card">
+                  <h4>Repaso</h4>
+                  <p class="detail-review">${escapeHtml(reviewValue)}</p>
+                </section>
+              `
+              : ""
+          }
+        </aside>
+      </section>
+
+      ${extraBlocksHtml}
+    </article>
+  `;
+}
+
+function renderExtraMediaReadOnlySection(tutorial) {
+  const blocks = normalizeExtraContentBlocks(tutorial.extraContent);
+  if (!blocks.length) {
+    return "";
+  }
+
+  const blocksHtml = blocks
+    .map((block, index) => renderReadOnlyExtraBlock(tutorial.title, block, index + 1, blocks.length))
+    .join("");
+
+  return `
+    <section class="detail-extra">
+      <section class="detail-extra-media">
+        <h4>Contenido agregado</h4>
+        <div class="detail-extra-media-list">
+          ${blocksHtml}
+        </div>
+      </section>
+    </section>
+  `;
+}
+
+function renderReadOnlyExtraBlock(tutorialTitle, block, order, total) {
+  const noteHtml = block.note ? nl2br(escapeHtml(block.note)) : `<span class="empty-side">Sin notas</span>`;
+  const typeLabel = block.type === "image" ? "Imagen" : block.type === "video" ? "Video" : "Texto";
+  const orderMeta = total > 1 ? `<span class="meta">${order}/${total}</span>` : "";
+  let contentHtml = "";
+  if (block.type === "text") {
+    contentHtml = `<pre>${escapeHtml(block.text || "")}</pre>`;
+  } else if (block.type === "image") {
+    contentHtml = `
+      <button
+        type="button"
+        class="side-media-image-open"
+        data-open-media-preview="${escapeAttribute(block.url)}"
+        data-open-media-caption="${escapeAttribute(block.caption || "")}"
+        data-open-media-alt="${escapeAttribute(tutorialTitle)}"
+      >
+        <img src="${escapeAttribute(block.url)}" alt="${escapeAttribute(block.caption || tutorialTitle)}" />
+      </button>
+    `;
+  } else {
+    const youtubeId = extractYouTubeId(block.url);
+    contentHtml = youtubeId
+      ? `<iframe src="https://www.youtube.com/embed/${youtubeId}" title="${escapeAttribute(tutorialTitle)}" allowfullscreen loading="lazy"></iframe>`
+      : `<video controls src="${escapeAttribute(block.url)}"></video>`;
+  }
+
+  const timestamps = Array.isArray(block.timestamps) ? block.timestamps : [];
+  const timestampsHtml =
+    block.type === "video" && timestamps.length
+      ? `
+        <section class="media-module-timestamps">
+          <h5>Timestamps</h5>
+          <ul class="timestamp-list extra-video-timestamps">${timestamps.map((entry) => `<li>${escapeHtml(entry)}</li>`).join("")}</ul>
+        </section>
+      `
+      : "";
+
+  return `
+    <article class="detail-extra-item media-module ${state.notesSide === "left" ? "is-notes-left" : ""}">
+      <div class="detail-extra-head media-module-head">
+        <div class="media-module-title">
+          <span class="tutorial-property-label">${typeLabel}</span>
+          ${orderMeta}
+        </div>
+      </div>
+      <div class="media-module-grid">
+        <div class="media-module-media">
+          ${block.caption ? `<p class="detail-extra-caption">${escapeHtml(block.caption)}</p>` : ""}
+          <div class="detail-extra-body">${contentHtml}</div>
+          ${timestampsHtml}
+        </div>
+        <section class="media-module-note">
+          <h5>Notas</h5>
+          <div class="detail-note-body">${noteHtml}</div>
+        </section>
+      </div>
+    </article>
+  `;
+}
+
+function renderTutorialEditorPanel() {
+  const tutorial = getActiveTutorialForDetail();
+  if (!tutorial) {
+    refs.detailPanel.innerHTML = `
+      <div class="empty-state">
+        <h3>No hay tutoriales para editar</h3>
+        <p>Vuelve a la biblioteca para crear tu primer tutorial.</p>
+      </div>
+    `;
+    return;
+  }
+
+  const blocks = normalizeExtraContentBlocks(tutorial.extraContent);
+  const modulesHtml = blocks.length
+    ? blocks.map((block, index) => renderEditorExtraModule(tutorial.id, block, index + 1, blocks.length)).join("")
+    : `<p class="meta">Aun no hay bloques adicionales.</p>`;
+
+  refs.detailPanel.innerHTML = `
+    <article class="detail-layout tutorial-editor-layout">
+      <header class="detail-header">
+        <div class="detail-heading">
+          <p class="detail-kicker">Edicion de pagina</p>
+          <h2 class="detail-title">${escapeHtml(tutorial.title)}</h2>
+          <p class="meta">Configura la estructura modular sin abrir el contenido final.</p>
+        </div>
+        <div class="detail-actions">
+          <button type="button" data-toggle-notes-side="1">${state.notesSide === "left" ? "Notas a la derecha" : "Notas a la izquierda"}</button>
+          <button type="button" data-close-tutorial-editor="1">Ver pagina</button>
+        </div>
+      </header>
+
+      <section class="detail-extra editor-modules">
+        <section class="detail-extra-media">
+          <h4>Bloque principal</h4>
+          ${renderEditorPrimaryModule(tutorial)}
+        </section>
+
+        <section class="detail-extra-media">
+          <h4>Bloques adicionales</h4>
+          <div class="detail-extra-media-list">
+            ${modulesHtml}
+          </div>
+          <div class="editor-add-row">
+            <button type="button" class="ghost-btn" data-add-content-id="${tutorial.id}" data-add-content-type="image">+ Imagen</button>
+            <button type="button" class="ghost-btn" data-add-content-id="${tutorial.id}" data-add-content-type="video">+ Video</button>
+            <button type="button" class="ghost-btn" data-editor-add-text-id="${tutorial.id}">+ Texto</button>
+          </div>
+        </section>
+      </section>
+    </article>
+  `;
+
+  refs.detailPanel.querySelectorAll("[data-editor-primary-field], [data-editor-extra-field]").forEach((element) => {
+    if (element instanceof HTMLTextAreaElement) {
+      autoGrowTextarea(element, 88);
+    }
+  });
+}
+
+function renderEditorPrimaryModule(tutorial) {
+  const isVideo = tutorial.type === "video";
+  const isImage = tutorial.type === "image";
+  const isText = tutorial.type === "text";
+  return `
+    <article class="detail-extra-item media-module ${state.notesSide === "left" ? "is-notes-left" : ""}">
+      <div class="detail-extra-head media-module-head">
+        <div class="media-module-title">
+          <span class="tutorial-property-label">Principal</span>
+        </div>
+      </div>
+      <div class="media-module-grid">
+        <div class="media-module-media editor-module-fields">
+          <label class="editor-inline-field">
+            <span class="tutorial-property-label">Titulo</span>
+            <input type="text" data-editor-primary-field="title" value="${escapeAttribute(tutorial.title)}" />
+          </label>
+          <label class="editor-inline-field">
+            <span class="tutorial-property-label">Tipo</span>
+            <select data-editor-primary-field="type">
+              <option value="video" ${tutorial.type === "video" ? "selected" : ""}>Video</option>
+              <option value="image" ${tutorial.type === "image" ? "selected" : ""}>Imagen</option>
+              <option value="text" ${tutorial.type === "text" ? "selected" : ""}>Texto</option>
+            </select>
+          </label>
+          <label class="editor-inline-field">
+            <span class="tutorial-property-label">Fuente</span>
+            <select data-editor-primary-field="source">
+              <option value="youtube" ${tutorial.source === "youtube" ? "selected" : ""}>YouTube</option>
+              <option value="instagram" ${tutorial.source === "instagram" ? "selected" : ""}>Instagram</option>
+              <option value="manual" ${tutorial.source === "manual" ? "selected" : ""}>Manual</option>
+            </select>
+          </label>
+          ${isVideo ? `<label class="editor-inline-field"><span class="tutorial-property-label">URL video</span><input type="url" data-editor-primary-field="url" value="${escapeAttribute(tutorial.url || "")}" /></label>` : ""}
+          ${isImage ? `<label class="editor-inline-field"><span class="tutorial-property-label">URL imagen</span><input type="url" data-editor-primary-field="imageUrl" value="${escapeAttribute(tutorial.imageUrl || tutorial.url || "")}" /></label>` : ""}
+          ${isText ? `<label class="editor-inline-field"><span class="tutorial-property-label">Texto</span><textarea data-editor-primary-field="textContent" placeholder="Contenido principal">${escapeHtml(tutorial.textContent || "")}</textarea></label>` : ""}
+          ${
+            isVideo
+              ? `<label class="editor-inline-field"><span class="tutorial-property-label">Timestamps</span><textarea data-editor-primary-field="timestamps" placeholder="00:12 Intro&#10;02:40 Punto clave">${escapeHtml(
+                  (tutorial.timestamps || []).join("\n")
+                )}</textarea></label>`
+              : ""
+          }
+        </div>
+        <section class="media-module-note">
+          <h5>Notas</h5>
+          <textarea class="module-note-editor" data-editor-primary-field="notes" placeholder="Nota principal...">${escapeHtml(tutorial.notes || "")}</textarea>
+        </section>
+      </div>
+    </article>
+  `;
+}
+
+function renderEditorExtraModule(tutorialId, block, order, total) {
+  const typeLabel = block.type === "image" ? "Imagen" : block.type === "video" ? "Video" : "Texto";
+  const orderMeta = total > 1 ? `<span class="meta">${order}/${total}</span>` : "";
+  const timestamps = Array.isArray(block.timestamps) ? block.timestamps : [];
+  return `
+    <article
+      class="detail-extra-item media-module ${state.notesSide === "left" ? "is-notes-left" : ""}"
+      draggable="true"
+      data-extra-module-id="${block.id}"
+      data-extra-module-tutorial-id="${tutorialId}"
+    >
+      <div class="detail-extra-head media-module-head">
+        <div class="media-module-title">
+          <button type="button" class="drag-handle" data-extra-drag-handle="1" title="Arrastra para mover">::</button>
+          <span class="tutorial-property-label">${typeLabel}</span>
+          ${orderMeta}
+        </div>
+        ${renderExtraBlockMenuV2(tutorialId, block.id, order, total)}
+      </div>
+      <div class="media-module-grid">
+        <div class="media-module-media editor-module-fields">
+          <label class="editor-inline-field">
+            <span class="tutorial-property-label">Tipo</span>
+            <select data-editor-extra-field="type" data-editor-extra-tutorial-id="${tutorialId}" data-editor-extra-block-id="${block.id}">
+              <option value="image" ${block.type === "image" ? "selected" : ""}>Imagen</option>
+              <option value="video" ${block.type === "video" ? "selected" : ""}>Video</option>
+              <option value="text" ${block.type === "text" ? "selected" : ""}>Texto</option>
+            </select>
+          </label>
+          <label class="editor-inline-field">
+            <span class="tutorial-property-label">Titulo</span>
+            <input
+              type="text"
+              data-editor-extra-field="caption"
+              data-editor-extra-tutorial-id="${tutorialId}"
+              data-editor-extra-block-id="${block.id}"
+              value="${escapeAttribute(block.caption || "")}"
+            />
+          </label>
+          ${
+            block.type === "text"
+              ? `
+                <label class="editor-inline-field">
+                  <span class="tutorial-property-label">Texto</span>
+                  <textarea
+                    data-editor-extra-field="text"
+                    data-editor-extra-tutorial-id="${tutorialId}"
+                    data-editor-extra-block-id="${block.id}"
+                    placeholder="Contenido del bloque de texto"
+                  >${escapeHtml(block.text || "")}</textarea>
+                </label>
+              `
+              : `
+                <label class="editor-inline-field">
+                  <span class="tutorial-property-label">URL</span>
+                  <input
+                    type="url"
+                    data-editor-extra-field="url"
+                    data-editor-extra-tutorial-id="${tutorialId}"
+                    data-editor-extra-block-id="${block.id}"
+                    value="${escapeAttribute(block.url || "")}"
+                  />
+                </label>
+              `
+          }
+          ${
+            block.type === "video"
+              ? `
+                <label class="editor-inline-field">
+                  <span class="tutorial-property-label">Timestamps</span>
+                  <textarea
+                    data-editor-extra-field="timestamps"
+                    data-editor-extra-tutorial-id="${tutorialId}"
+                    data-editor-extra-block-id="${block.id}"
+                    placeholder="00:20 Intro&#10;03:40 Ejemplo"
+                  >${escapeHtml(timestamps.join("\n"))}</textarea>
+                </label>
+              `
+              : ""
+          }
+        </div>
+        <section class="media-module-note">
+          <h5>Notas</h5>
+          <textarea
+            class="module-note-editor"
+            data-editor-extra-field="note"
+            data-editor-extra-tutorial-id="${tutorialId}"
+            data-editor-extra-block-id="${block.id}"
+            placeholder="Notas del bloque..."
+          >${escapeHtml(block.note || "")}</textarea>
+        </section>
+      </div>
+    </article>
+  `;
+}
+
+function renderDetailPanelLegacy() {
   if (!state.currentUser || !state.tutorials.length) {
     refs.detailPanel.innerHTML = `
       <div class="empty-state">
@@ -2086,6 +3092,7 @@ function renderDetailPanel() {
   if (!tutorial) {
     tutorial = state.tutorials[0];
     state.selectedId = tutorial.id;
+    syncRouteToLocation(true);
   }
 
   const tagsHtml = tutorial.tags.length
@@ -2149,6 +3156,300 @@ function renderDetailPanel() {
   if (favoriteButton) {
     favoriteButton.innerHTML = tutorial.isFavorite ? "&#9733;" : "&#9734;";
   }
+  const liveTextArea = refs.detailPanel.querySelector(".detail-composer-text-input");
+  if (liveTextArea instanceof HTMLTextAreaElement) {
+    autoGrowTextarea(liveTextArea, 120);
+  }
+}
+
+function renderDetailPanel() {
+  if (!state.currentUser || !state.tutorials.length) {
+    refs.detailPanel.innerHTML = `
+      <div class="empty-state">
+        <h3>No hay tutoriales para abrir</h3>
+        <p>Vuelve a la biblioteca para crear tu primer tutorial.</p>
+      </div>
+    `;
+    return;
+  }
+
+  let tutorial = state.tutorials.find((item) => item.id === state.selectedId);
+  if (!tutorial) {
+    tutorial = state.tutorials[0];
+    state.selectedId = tutorial.id;
+  }
+
+  const sourceLabel = escapeHtml(formatSource(tutorial.source || "manual"));
+  const sourceValue = tutorial.url
+    ? `<a href="${escapeAttribute(tutorial.url)}" target="_blank" rel="noreferrer">${sourceLabel}</a>`
+    : sourceLabel;
+  const tsHtml = tutorial.timestamps.length
+    ? `<ul class="timestamp-list">${tutorial.timestamps.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>`
+    : `<p class="empty-side">Sin timestamps</p>`;
+  const createdAt = new Date(tutorial.createdAt || Date.now()).toLocaleString("es-BO");
+  const updatedAt = new Date(tutorial.updatedAt || tutorial.createdAt || Date.now()).toLocaleString("es-BO");
+  const reviewValue = tutorial.reviewDate || "Sin fecha";
+  const showStudyMeta = tutorial.type !== "image";
+  syncLiveTextComposerForTutorial(tutorial);
+  const extraMediaHtml = renderExtraMediaSection(tutorial);
+  const extraComposerHtml = renderExtraContentComposer(tutorial);
+
+  refs.detailPanel.innerHTML = `
+    <article class="detail-layout">
+      <header class="detail-header">
+        <div class="detail-heading">
+          <p class="detail-kicker">Pagina de tutorial</p>
+          <h2 class="detail-title">${escapeHtml(tutorial.title)}</h2>
+          <div class="detail-badges">
+            <span class="pill ${statusPillClass(tutorial.status)}">${escapeHtml(tutorial.status)}</span>
+            <span class="tag">${formatType(tutorial.type)}</span>
+            <span class="tag">${escapeHtml(tutorial.category || "Sin categoria")}</span>
+            <span class="tag">${escapeHtml(tutorial.priority)}</span>
+          </div>
+        </div>
+        <div class="detail-actions">
+          <button type="button" data-toggle-notes-side="1">${state.notesSide === "left" ? "Notas a la derecha" : "Notas a la izquierda"}</button>
+          <button
+            type="button"
+            class="favorite-btn ${tutorial.isFavorite ? "is-on" : ""}"
+            data-toggle-favorite="${tutorial.id}"
+            title="Favorito"
+          >
+            ${tutorial.isFavorite ? "&#9733;" : "&#9734;"}
+          </button>
+          <button type="button" data-edit-id="${tutorial.id}">Editar</button>
+        </div>
+      </header>
+
+      <section class="detail-properties-grid">
+        <article class="detail-property-card">
+          <span class="tutorial-property-label">Creado</span>
+          <span class="tutorial-property-value">${escapeHtml(createdAt)}</span>
+        </article>
+        <article class="detail-property-card">
+          <span class="tutorial-property-label">Actualizado</span>
+          <span class="tutorial-property-value">${escapeHtml(updatedAt)}</span>
+        </article>
+        <article class="detail-property-card">
+          <span class="tutorial-property-label">Coleccion</span>
+          <span class="tutorial-property-value">${escapeHtml(tutorial.collection || "Sin coleccion")}</span>
+        </article>
+        <article class="detail-property-card">
+          <span class="tutorial-property-label">Fuente</span>
+          <span class="tutorial-property-value">${sourceValue}</span>
+        </article>
+      </section>
+
+      <section class="detail-content-grid ${state.notesSide === "left" ? "is-notes-left" : ""}">
+        <div class="detail-media-area">
+          <div class="media-frame">${renderDetailMedia(tutorial)}</div>
+        </div>
+        <aside class="detail-side ${showStudyMeta ? "" : "detail-side--notes-only"}">
+          <section class="detail-side-card">
+            <h4>Notas</h4>
+            <div class="detail-note-body">
+              <textarea
+                class="detail-note-editor"
+                data-notes-editor-id="${tutorial.id}"
+                placeholder="Escribe notas para este tutorial..."
+              >${escapeHtml(tutorial.notes || "")}</textarea>
+            </div>
+          </section>
+          ${
+            showStudyMeta
+              ? `
+                <section class="detail-side-card">
+                  <h4>Timestamps</h4>
+                  ${tsHtml}
+                </section>
+                <section class="detail-side-card">
+                  <h4>Repaso</h4>
+                  <p class="detail-review">${escapeHtml(reviewValue)}</p>
+                </section>
+              `
+              : ""
+          }
+        </aside>
+      </section>
+
+      <section class="detail-extra">
+        ${extraMediaHtml}
+        ${extraComposerHtml}
+        <details class="detail-add-menu">
+          <summary class="detail-add-trigger" aria-label="Agregar contenido">+</summary>
+          <div class="row-menu-panel detail-add-panel">
+            <button type="button" class="ghost-btn" data-add-content-id="${tutorial.id}" data-add-content-type="image">Imagen</button>
+            <button type="button" class="ghost-btn" data-add-content-id="${tutorial.id}" data-add-content-type="video">Video</button>
+            <button type="button" class="ghost-btn" data-add-content-id="${tutorial.id}" data-add-content-type="text">Texto</button>
+          </div>
+        </details>
+      </section>
+    </article>
+  `;
+
+  const favoriteButton = refs.detailPanel.querySelector(`[data-toggle-favorite="${tutorial.id}"]`);
+  if (favoriteButton) {
+    favoriteButton.innerHTML = tutorial.isFavorite ? "&#9733;" : "&#9734;";
+  }
+  const detailImage = refs.detailPanel.querySelector(".detail-media-area .media-frame img");
+  if (detailImage instanceof HTMLImageElement && !detailImage.complete) {
+    detailImage.addEventListener(
+      "load",
+      () => {
+        syncDetailEditorsLayout(tutorial.id);
+      },
+      { once: true }
+    );
+  }
+  syncDetailEditorsLayout(tutorial.id);
+}
+
+function syncDetailEditorsLayout(tutorialId) {
+  if (!tutorialId) {
+    return;
+  }
+  const tutorial = state.tutorials.find((item) => item.id === tutorialId);
+  const noteEditor = refs.detailPanel.querySelector(`[data-notes-editor-id="${tutorialId}"]`);
+  if (noteEditor instanceof HTMLTextAreaElement) {
+    if (tutorial?.type === "text") {
+      noteEditor.style.removeProperty("height");
+      noteEditor.style.removeProperty("max-height");
+      noteEditor.style.removeProperty("min-height");
+      noteEditor.style.overflowY = "hidden";
+      autoGrowTextarea(noteEditor, 92);
+    } else {
+      syncPrimaryNotesHeight(noteEditor);
+    }
+  }
+  const liveTextArea = refs.detailPanel.querySelector(".detail-composer-text-input");
+  if (liveTextArea instanceof HTMLTextAreaElement) {
+    autoGrowTextarea(liveTextArea, 120);
+  }
+  syncExtraModuleNotesHeights();
+}
+
+function clampEditorHeight(editor, targetPx, minPx = 120) {
+  if (!(editor instanceof HTMLTextAreaElement)) {
+    return;
+  }
+  const nextHeight = Math.max(minPx, Math.floor(Number(targetPx) || 0));
+  if (!Number.isFinite(nextHeight) || nextHeight <= 0) {
+    return;
+  }
+  editor.style.height = `${nextHeight}px`;
+  editor.style.minHeight = `${nextHeight}px`;
+  editor.style.maxHeight = `${nextHeight}px`;
+  editor.style.overflowY = "auto";
+}
+
+function syncPrimaryNotesHeight(noteEditor) {
+  if (!(noteEditor instanceof HTMLTextAreaElement) || state.page !== "tutorial") {
+    return;
+  }
+  const tutorial = state.tutorials.find((item) => item.id === state.selectedId);
+  if (!tutorial || tutorial.type === "text") {
+    noteEditor.style.removeProperty("height");
+    noteEditor.style.removeProperty("max-height");
+    noteEditor.style.removeProperty("min-height");
+    noteEditor.style.overflowY = "hidden";
+    return;
+  }
+
+  const mediaFrame = refs.detailPanel.querySelector(".detail-media-area .media-frame");
+  if (!(mediaFrame instanceof HTMLElement)) {
+    return;
+  }
+
+  const noteCard = noteEditor.closest(".detail-side-card");
+  const noteHeading = noteCard?.querySelector("h4");
+  const headingHeight = noteHeading instanceof HTMLElement ? noteHeading.getBoundingClientRect().height + 6 : 0;
+  clampEditorHeight(noteEditor, mediaFrame.getBoundingClientRect().height - headingHeight, 140);
+}
+
+function syncExtraModuleNotesHeights() {
+  const modules = refs.detailPanel.querySelectorAll(".media-module");
+  if (!modules.length) {
+    return;
+  }
+  modules.forEach((module) => {
+    if (!(module instanceof HTMLElement)) {
+      return;
+    }
+    const noteEditor = module.querySelector("[data-extra-block-note-id]");
+    const mediaColumn = module.querySelector(".media-module-media");
+    if (!(noteEditor instanceof HTMLTextAreaElement) || !(mediaColumn instanceof HTMLElement)) {
+      return;
+    }
+    const heading = module.querySelector(".media-module-note h5");
+    const headingHeight = heading instanceof HTMLElement ? heading.getBoundingClientRect().height + 6 : 0;
+    clampEditorHeight(noteEditor, mediaColumn.getBoundingClientRect().height - headingHeight, 92);
+
+    const image = mediaColumn.querySelector("img");
+    if (image instanceof HTMLImageElement && !image.complete && image.dataset.layoutBound !== "1") {
+      image.dataset.layoutBound = "1";
+      image.addEventListener(
+        "load",
+        () => {
+          image.dataset.layoutBound = "0";
+          if (state.selectedId) {
+            syncDetailEditorsLayout(state.selectedId);
+          }
+        },
+        { once: true }
+      );
+    }
+    const video = mediaColumn.querySelector("video");
+    if (video instanceof HTMLVideoElement && video.readyState < 1 && video.dataset.layoutBound !== "1") {
+      video.dataset.layoutBound = "1";
+      video.addEventListener(
+        "loadedmetadata",
+        () => {
+          video.dataset.layoutBound = "0";
+          if (state.selectedId) {
+            syncDetailEditorsLayout(state.selectedId);
+          }
+        },
+        { once: true }
+      );
+    }
+  });
+}
+
+function syncLiveTextComposerForTutorial(tutorial) {
+  if (!tutorial) {
+    return;
+  }
+  const blocks = normalizeExtraContentBlocks(tutorial.extraContent);
+  const textBlocks = blocks.filter((block) => block.type === "text");
+  const draft = loadLiveTextDraft(tutorial.id);
+
+  if (state.extraComposer && state.extraComposer.type === "text" && state.extraComposer.tutorialId !== tutorial.id) {
+    state.extraComposer = null;
+  }
+
+  if (!state.extraComposer && (textBlocks.length || draft)) {
+    const latest = textBlocks[textBlocks.length - 1] || null;
+    state.extraComposer = {
+      tutorialId: tutorial.id,
+      type: "text",
+      url: "",
+      text: latest?.text || "",
+      caption: latest?.caption || "",
+      blockId: latest?.id || null,
+    };
+  }
+
+  if (state.extraComposer && state.extraComposer.tutorialId === tutorial.id && draft) {
+    if (typeof draft.text === "string") {
+      state.extraComposer.text = draft.text;
+    }
+    if (typeof draft.caption === "string") {
+      state.extraComposer.caption = draft.caption;
+    }
+    if (typeof draft.blockId === "string" && draft.blockId) {
+      state.extraComposer.blockId = draft.blockId;
+    }
+  }
 }
 
 function renderDetailMedia(tutorial) {
@@ -2171,6 +3472,1250 @@ function renderDetailMedia(tutorial) {
   return tutorial.url
     ? `<p><a href="${escapeAttribute(tutorial.url)}" target="_blank" rel="noreferrer">Abrir video</a></p>`
     : "<p class='empty-side'>No hay video para mostrar.</p>";
+}
+
+function renderExtraMediaSection(tutorial) {
+  const blocks = normalizeExtraContentBlocks(tutorial.extraContent);
+  const mediaBlocks = blocks.filter((block) => block.type === "image" || block.type === "video");
+  if (!mediaBlocks.length) {
+    return "";
+  }
+
+  const modulesHtml = mediaBlocks
+    .map((block, index) => renderExtraMediaModuleV2(tutorial.id, tutorial.title, block, index + 1, mediaBlocks.length))
+    .join("");
+
+  return `
+    <section class="detail-extra-media">
+      <h4>Contenido agregado</h4>
+      <div class="detail-extra-media-list">
+        ${modulesHtml}
+      </div>
+    </section>
+  `;
+}
+
+function renderExtraMediaModule(tutorialId, tutorialTitle, block, order, total) {
+  const youtubeId = extractYouTubeId(block.url);
+  const timestamps = Array.isArray(block.timestamps) ? block.timestamps : [];
+  const orderMeta = total > 1 ? `<span class="meta">${order}/${total}</span>` : "";
+  let mediaHtml = "";
+  if (block.type === "image") {
+    mediaHtml = `
+      <button
+        type="button"
+        class="side-media-image-open"
+        data-open-media-preview="${escapeAttribute(block.url)}"
+        data-open-media-caption="${escapeAttribute(block.caption || "")}"
+        data-open-media-alt="${escapeAttribute(tutorialTitle)}"
+      >
+        <img src="${escapeAttribute(block.url)}" alt="${escapeAttribute(block.caption || tutorialTitle)}" />
+      </button>
+    `;
+  } else {
+    mediaHtml = youtubeId
+      ? `<iframe src="https://www.youtube.com/embed/${youtubeId}" title="${escapeAttribute(
+          tutorialTitle
+        )}" allowfullscreen loading="lazy"></iframe>`
+      : `<video controls data-extra-video-id="${block.id}" src="${escapeAttribute(block.url)}"></video>`;
+  }
+
+  const timestampsHtml = timestamps.length
+    ? `
+      <ul class="timestamp-list extra-video-timestamps">
+        ${timestamps
+          .map((entry) => {
+            const seconds = parseTimestampToSeconds(entry);
+            const canJump = Number.isFinite(seconds) && !youtubeId;
+            if (!canJump) {
+              return `<li>${escapeHtml(entry)}</li>`;
+            }
+            return `
+              <li>
+                <button
+                  type="button"
+                  class="ghost-btn timestamp-jump-btn"
+                  data-video-jump-id="${block.id}"
+                  data-video-jump-seconds="${seconds}"
+                >
+                  ${escapeHtml(entry)}
+                </button>
+              </li>
+            `;
+          })
+          .join("")}
+      </ul>
+    `
+    : "";
+
+  return `
+    <article
+      class="detail-extra-item side-video-item media-module"
+      draggable="true"
+      data-extra-module-id="${block.id}"
+      data-extra-module-tutorial-id="${tutorialId}"
+    >
+      <div class="detail-extra-head media-module-head">
+        <div class="media-module-title">
+          <span class="drag-handle" title="Arrastra para mover">⋮⋮</span>
+          <span class="tutorial-property-label">${block.type === "image" ? "Imagen" : "Video"}</span>
+          ${orderMeta}
+        </div>
+        ${renderExtraBlockMenu(tutorialId, block.id)}
+      </div>
+      ${block.caption ? `<p class="detail-extra-caption">${escapeHtml(block.caption)}</p>` : ""}
+      <div class="detail-extra-body">${mediaHtml}</div>
+      ${
+        block.type === "video"
+          ? `
+            ${timestampsHtml}
+            <label class="module-note-field">
+              <span class="tutorial-property-label">Nota del video</span>
+              <textarea
+                class="module-note-editor"
+                data-extra-block-note-id="${block.id}"
+                data-extra-block-tutorial-id="${tutorialId}"
+                placeholder="Escribe una nota para este video..."
+              >${escapeHtml(block.note || "")}</textarea>
+            </label>
+          `
+          : `
+            <label class="module-note-field">
+              <span class="tutorial-property-label">Nota de la imagen</span>
+              <textarea
+                class="module-note-editor"
+                data-extra-block-note-id="${block.id}"
+                data-extra-block-tutorial-id="${tutorialId}"
+                placeholder="Escribe una nota para esta imagen..."
+              >${escapeHtml(block.note || "")}</textarea>
+            </label>
+          `
+      }
+    </article>
+  `;
+}
+
+function renderExtraBlockMenu(tutorialId, blockId) {
+  return `
+    <details class="row-menu row-menu-card detail-extra-menu">
+      <summary class="menu-trigger" aria-label="Opciones del adjunto">···</summary>
+      <div class="row-menu-panel">
+        <p class="meta">Eliminar este adjunto.</p>
+        <div class="menu-actions">
+          <button
+            type="button"
+            class="danger"
+            data-remove-extra-id="${tutorialId}"
+            data-remove-content-block-id="${blockId}"
+          >
+            Eliminar
+          </button>
+        </div>
+      </div>
+    </details>
+  `;
+}
+
+function renderExtraMediaModuleV2(tutorialId, tutorialTitle, block, order, total) {
+  const youtubeId = extractYouTubeId(block.url);
+  const timestamps = Array.isArray(block.timestamps) ? block.timestamps : [];
+  const orderMeta = total > 1 ? `<span class="meta">${order}/${total}</span>` : "";
+  let mediaHtml = "";
+  if (block.type === "image") {
+    mediaHtml = `
+      <button
+        type="button"
+        class="side-media-image-open"
+        data-open-media-preview="${escapeAttribute(block.url)}"
+        data-open-media-caption="${escapeAttribute(block.caption || "")}"
+        data-open-media-alt="${escapeAttribute(tutorialTitle)}"
+      >
+        <img src="${escapeAttribute(block.url)}" alt="${escapeAttribute(block.caption || tutorialTitle)}" />
+      </button>
+    `;
+  } else {
+    mediaHtml = youtubeId
+      ? `<iframe src="https://www.youtube.com/embed/${youtubeId}" title="${escapeAttribute(
+          tutorialTitle
+        )}" allowfullscreen loading="lazy"></iframe>`
+      : `<video controls data-extra-video-id="${block.id}" src="${escapeAttribute(block.url)}"></video>`;
+  }
+
+  const timestampsHtml = block.type === "video" && timestamps.length
+    ? `
+      <section class="media-module-timestamps">
+        <h5>Timestamps</h5>
+        <ul class="timestamp-list extra-video-timestamps">
+          ${timestamps
+            .map((entry) => {
+              const seconds = parseTimestampToSeconds(entry);
+              const canJump = Number.isFinite(seconds) && !youtubeId;
+              if (!canJump) {
+                return `<li>${escapeHtml(entry)}</li>`;
+              }
+              return `
+                <li>
+                  <button
+                    type="button"
+                    class="ghost-btn timestamp-jump-btn"
+                    data-video-jump-id="${block.id}"
+                    data-video-jump-seconds="${seconds}"
+                  >
+                    ${escapeHtml(entry)}
+                  </button>
+                </li>
+              `;
+            })
+            .join("")}
+        </ul>
+      </section>
+    `
+    : "";
+
+  const blockTypeLabel = block.type === "image" ? "Imagen" : "Video";
+  return `
+    <article
+      class="detail-extra-item media-module ${state.notesSide === "left" ? "is-notes-left" : ""}"
+      draggable="true"
+      data-extra-module-id="${block.id}"
+      data-extra-module-tutorial-id="${tutorialId}"
+    >
+      <div class="detail-extra-head media-module-head">
+        <div class="media-module-title">
+          <button type="button" class="drag-handle" data-extra-drag-handle="1" title="Arrastra para mover">::</button>
+          <span class="tutorial-property-label">${blockTypeLabel}</span>
+          ${orderMeta}
+        </div>
+        ${renderExtraBlockMenuV2(tutorialId, block.id, order, total)}
+      </div>
+      <div class="media-module-grid">
+        <div class="media-module-media">
+          ${block.caption ? `<p class="detail-extra-caption">${escapeHtml(block.caption)}</p>` : ""}
+          <div class="detail-extra-body">${mediaHtml}</div>
+          ${timestampsHtml}
+        </div>
+        <section class="media-module-note">
+          <h5>Notas</h5>
+          <textarea
+            class="module-note-editor"
+            data-extra-block-note-id="${block.id}"
+            data-extra-block-tutorial-id="${tutorialId}"
+            placeholder="Escribe una nota para este bloque..."
+          >${escapeHtml(block.note || "")}</textarea>
+        </section>
+      </div>
+    </article>
+  `;
+}
+
+function renderExtraBlockMenuV2(tutorialId, blockId, order, total) {
+  const first = order <= 1;
+  const last = order >= total;
+  return `
+    <details class="row-menu row-menu-card detail-extra-menu">
+      <summary class="menu-trigger" aria-label="Opciones del bloque">...</summary>
+      <div class="row-menu-panel">
+        <div class="menu-actions">
+          <button
+            type="button"
+            class="ghost-btn"
+            data-move-extra-id="${tutorialId}"
+            data-move-content-block-id="${blockId}"
+            data-move-direction="-1"
+            ${first ? "disabled" : ""}
+          >
+            Subir
+          </button>
+          <button
+            type="button"
+            class="ghost-btn"
+            data-move-extra-id="${tutorialId}"
+            data-move-content-block-id="${blockId}"
+            data-move-direction="1"
+            ${last ? "disabled" : ""}
+          >
+            Bajar
+          </button>
+        </div>
+        <div class="menu-actions">
+          <button
+            type="button"
+            class="danger"
+            data-remove-extra-id="${tutorialId}"
+            data-remove-content-block-id="${blockId}"
+          >
+            Eliminar bloque
+          </button>
+        </div>
+      </div>
+    </details>
+  `;
+}
+
+function getMediaCarouselIndex(tutorialId, total) {
+  const count = Math.max(0, Number(total) || 0);
+  if (!tutorialId || !count) {
+    return 0;
+  }
+  const raw = Number(state.mediaCarouselIndexByTutorial[tutorialId] || 0);
+  if (!Number.isFinite(raw)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(count - 1, Math.trunc(raw)));
+}
+
+function setMediaCarouselIndex(tutorialId, index) {
+  if (!tutorialId) {
+    return;
+  }
+  const tutorial = state.tutorials.find((item) => item.id === tutorialId);
+  const total = normalizeExtraContentBlocks(tutorial?.extraContent)
+    .filter((block) => block.type === "image")
+    .length;
+  if (!total) {
+    state.mediaCarouselIndexByTutorial[tutorialId] = 0;
+    return;
+  }
+  const next = Math.max(0, Math.min(total - 1, Math.trunc(Number(index) || 0)));
+  state.mediaCarouselIndexByTutorial[tutorialId] = next;
+}
+
+function shiftMediaCarousel(tutorialId, delta) {
+  const tutorial = state.tutorials.find((item) => item.id === tutorialId);
+  const imageBlocks = normalizeExtraContentBlocks(tutorial?.extraContent).filter((block) => block.type === "image");
+  const total = imageBlocks.length;
+  if (!tutorialId || !total) {
+    return;
+  }
+  const current = getMediaCarouselIndex(tutorialId, total);
+  const next = (current + Number(delta || 0) + total) % total;
+  state.mediaCarouselIndexByTutorial[tutorialId] = next;
+  render();
+}
+
+function parseTimestampToSeconds(value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return NaN;
+  }
+  const match = text.match(/(\d{1,2}:){1,2}\d{1,2}|\d{1,4}/);
+  const token = match ? match[0] : text;
+  const parts = token.split(":").map((part) => Number(part.trim()));
+  if (parts.some((part) => !Number.isFinite(part) || part < 0)) {
+    return NaN;
+  }
+  if (parts.length === 1) {
+    return parts[0];
+  }
+  if (parts.length === 2) {
+    return parts[0] * 60 + parts[1];
+  }
+  if (parts.length === 3) {
+    return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  }
+  return NaN;
+}
+
+function jumpExtraVideoToTimestamp(blockId, secondsRaw) {
+  if (!blockId) {
+    return;
+  }
+  const seconds = Number(secondsRaw);
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    return;
+  }
+  const target = refs.detailPanel.querySelector(`[data-extra-video-id="${blockId}"]`);
+  if (!(target instanceof HTMLVideoElement)) {
+    return;
+  }
+  target.currentTime = seconds;
+  target.play().catch(() => {});
+}
+
+function openMediaPreviewDialog(url, caption = "", alt = "") {
+  if (!refs.mediaPreviewDialog?.showModal || !refs.mediaPreviewImage) {
+    return;
+  }
+  const safeUrl = String(url || "").trim();
+  if (!safeUrl) {
+    return;
+  }
+  refs.mediaPreviewImage.src = safeUrl;
+  refs.mediaPreviewImage.alt = String(alt || "Vista previa");
+  if (refs.mediaPreviewCaption) {
+    refs.mediaPreviewCaption.textContent = String(caption || "");
+    refs.mediaPreviewCaption.classList.toggle("hidden", !String(caption || "").trim());
+  }
+  if (!refs.mediaPreviewDialog.open) {
+    refs.mediaPreviewDialog.showModal();
+  }
+}
+
+function closeMediaPreviewDialog() {
+  if (refs.mediaPreviewDialog?.open) {
+    refs.mediaPreviewDialog.close();
+  }
+  if (refs.mediaPreviewImage) {
+    refs.mediaPreviewImage.src = "";
+  }
+}
+
+function scheduleNotesAutosave(tutorialId, value) {
+  if (!tutorialId) {
+    return;
+  }
+  if (notesAutosaveTimer) {
+    window.clearTimeout(notesAutosaveTimer);
+  }
+  notesAutosaveTimer = window.setTimeout(() => {
+    void saveDetailNotesAutosave(tutorialId, value);
+  }, 700);
+}
+
+async function saveDetailNotesAutosave(tutorialId, value) {
+  const tutorial = state.tutorials.find((item) => item.id === tutorialId);
+  if (!tutorial) {
+    return;
+  }
+  const nextNotes = String(value || "");
+  if (nextNotes === String(tutorial.notes || "")) {
+    return;
+  }
+
+  const updatedAt = new Date().toISOString();
+  const payload = {
+    ...tutorial,
+    notes: nextNotes,
+    updatedAt,
+  };
+  try {
+    await apiUpdateTutorial(tutorialId, payload);
+    tutorial.notes = nextNotes;
+    tutorial.updatedAt = updatedAt;
+    setSyncStatus(`Guardado · ${new Date().toLocaleTimeString("es-BO", { hour: "2-digit", minute: "2-digit" })}`);
+  } catch (error) {
+    showOperationError(error, "No se pudieron guardar las notas.");
+  }
+}
+
+function scheduleExtraBlockFieldAutosave(tutorialId, blockId, field, value) {
+  if (!tutorialId || !blockId || !field) {
+    return;
+  }
+  const timerKey = `${tutorialId}:${blockId}:${field}`;
+  const existingTimer = extraBlockAutosaveTimers.get(timerKey);
+  if (existingTimer) {
+    window.clearTimeout(existingTimer);
+  }
+  const timer = window.setTimeout(() => {
+    extraBlockAutosaveTimers.delete(timerKey);
+    void saveExtraBlockField(tutorialId, blockId, field, value);
+  }, 420);
+  extraBlockAutosaveTimers.set(timerKey, timer);
+}
+
+async function saveExtraBlockField(tutorialId, blockId, field, value) {
+  if (!tutorialId || !blockId || !field) {
+    return;
+  }
+  if (!["note"].includes(field)) {
+    return;
+  }
+  const tutorial = state.tutorials.find((item) => item.id === tutorialId);
+  if (!tutorial) {
+    return;
+  }
+  const blocks = normalizeExtraContentBlocks(tutorial.extraContent);
+  const index = blocks.findIndex((block) => block.id === blockId);
+  if (index < 0) {
+    return;
+  }
+  const current = blocks[index];
+  const nextValue = String(value || "");
+  if (String(current[field] || "") === nextValue) {
+    return;
+  }
+
+  const nextBlocks = [...blocks];
+  nextBlocks[index] = {
+    ...current,
+    [field]: nextValue,
+  };
+  const updatedAt = new Date().toISOString();
+  const payload = {
+    ...tutorial,
+    extraContent: normalizeExtraContentBlocks(nextBlocks),
+    updatedAt,
+  };
+  try {
+    await apiUpdateTutorial(tutorialId, payload);
+    tutorial.extraContent = payload.extraContent;
+    tutorial.updatedAt = updatedAt;
+    setSyncStatus(`Guardado · ${new Date().toLocaleTimeString("es-BO", { hour: "2-digit", minute: "2-digit" })}`);
+  } catch (error) {
+    showOperationError(error, "No se pudo guardar la nota del modulo.");
+  }
+}
+
+function scheduleTutorialEditorPrimarySave(tutorialId, field, value) {
+  if (!tutorialId || !field) {
+    return;
+  }
+  const timerKey = `p:${tutorialId}:${field}`;
+  const existing = tutorialEditorAutosaveTimers.get(timerKey);
+  if (existing) {
+    window.clearTimeout(existing);
+  }
+  const timer = window.setTimeout(() => {
+    tutorialEditorAutosaveTimers.delete(timerKey);
+    void saveTutorialEditorPrimaryField(tutorialId, field, value);
+  }, 420);
+  tutorialEditorAutosaveTimers.set(timerKey, timer);
+}
+
+function scheduleTutorialEditorExtraSave(tutorialId, blockId, field, value) {
+  if (!tutorialId || !blockId || !field) {
+    return;
+  }
+  const timerKey = `e:${tutorialId}:${blockId}:${field}`;
+  const existing = tutorialEditorAutosaveTimers.get(timerKey);
+  if (existing) {
+    window.clearTimeout(existing);
+  }
+  const timer = window.setTimeout(() => {
+    tutorialEditorAutosaveTimers.delete(timerKey);
+    void saveTutorialEditorExtraField(tutorialId, blockId, field, value);
+  }, 420);
+  tutorialEditorAutosaveTimers.set(timerKey, timer);
+}
+
+async function saveTutorialEditorPrimaryField(tutorialId, field, value) {
+  const tutorial = state.tutorials.find((item) => item.id === tutorialId);
+  if (!tutorial) {
+    return;
+  }
+  const nextValue = String(value ?? "");
+  let changed = false;
+  switch (field) {
+    case "title": {
+      const title = nextValue.trim();
+      if (!title || title === tutorial.title) {
+        return;
+      }
+      tutorial.title = title;
+      changed = true;
+      break;
+    }
+    case "type": {
+      if (!["video", "image", "text"].includes(nextValue) || nextValue === tutorial.type) {
+        return;
+      }
+      tutorial.type = nextValue;
+      if (tutorial.type !== "video") {
+        tutorial.timestamps = [];
+      }
+      changed = true;
+      break;
+    }
+    case "source": {
+      if (!["youtube", "instagram", "manual"].includes(nextValue) || nextValue === tutorial.source) {
+        return;
+      }
+      tutorial.source = nextValue;
+      changed = true;
+      break;
+    }
+    case "url": {
+      if (nextValue === tutorial.url) {
+        return;
+      }
+      tutorial.url = nextValue;
+      tutorial.normalizedUrl = normalizeUrl(nextValue);
+      changed = true;
+      break;
+    }
+    case "imageUrl": {
+      if (nextValue === tutorial.imageUrl) {
+        return;
+      }
+      tutorial.imageUrl = nextValue;
+      changed = true;
+      break;
+    }
+    case "textContent": {
+      if (nextValue === tutorial.textContent) {
+        return;
+      }
+      tutorial.textContent = nextValue;
+      changed = true;
+      break;
+    }
+    case "notes": {
+      if (nextValue === tutorial.notes) {
+        return;
+      }
+      tutorial.notes = nextValue;
+      changed = true;
+      break;
+    }
+    case "timestamps": {
+      const nextTimestamps = parseTimestampLines(nextValue);
+      if (JSON.stringify(nextTimestamps) === JSON.stringify(tutorial.timestamps || [])) {
+        return;
+      }
+      tutorial.timestamps = nextTimestamps;
+      changed = true;
+      break;
+    }
+    default:
+      return;
+  }
+
+  if (!changed) {
+    return;
+  }
+
+  const updatedAt = new Date().toISOString();
+  tutorial.updatedAt = updatedAt;
+  const payload = {
+    ...tutorial,
+    updatedAt,
+  };
+  try {
+    await apiUpdateTutorial(tutorialId, payload);
+    setSyncStatus(`Guardado · ${new Date().toLocaleTimeString("es-BO", { hour: "2-digit", minute: "2-digit" })}`);
+    if (field === "type") {
+      render();
+    }
+  } catch (error) {
+    showOperationError(error, "No se pudo guardar el bloque principal.");
+    await refreshTutorials();
+  }
+}
+
+async function saveTutorialEditorExtraField(tutorialId, blockId, field, value) {
+  const tutorial = state.tutorials.find((item) => item.id === tutorialId);
+  if (!tutorial) {
+    return;
+  }
+  const blocks = normalizeExtraContentBlocks(tutorial.extraContent);
+  const index = blocks.findIndex((block) => block.id === blockId);
+  if (index < 0) {
+    return;
+  }
+  const current = blocks[index];
+  const nextValue = String(value ?? "");
+  const nextBlock = { ...current };
+
+  switch (field) {
+    case "type":
+      if (!["image", "video", "text"].includes(nextValue) || nextValue === current.type) {
+        return;
+      }
+      nextBlock.type = nextValue;
+      if (nextValue === "text") {
+        nextBlock.text = typeof current.text === "string" && current.text.trim() ? current.text : "Nuevo bloque de texto";
+        nextBlock.url = "";
+        nextBlock.timestamps = [];
+      } else {
+        nextBlock.url = typeof current.url === "string" && current.url.trim() ? current.url : "https://";
+        nextBlock.text = "";
+        nextBlock.timestamps = nextValue === "video" ? normalizeTimestampEntries(current.timestamps) : [];
+      }
+      break;
+    case "caption":
+      if (nextValue === (current.caption || "")) {
+        return;
+      }
+      nextBlock.caption = nextValue;
+      break;
+    case "url":
+      if (current.type === "text") {
+        return;
+      }
+      if (!nextValue.trim()) {
+        return;
+      }
+      if (nextValue === (current.url || "")) {
+        return;
+      }
+      nextBlock.url = nextValue;
+      break;
+    case "text":
+      if (current.type !== "text") {
+        return;
+      }
+      if (!nextValue.trim()) {
+        return;
+      }
+      if (nextValue === (current.text || "")) {
+        return;
+      }
+      nextBlock.text = nextValue;
+      break;
+    case "timestamps":
+      if (current.type !== "video") {
+        return;
+      }
+      {
+        const nextTimestamps = parseTimestampLines(nextValue);
+        if (JSON.stringify(nextTimestamps) === JSON.stringify(current.timestamps || [])) {
+          return;
+        }
+        nextBlock.timestamps = nextTimestamps;
+      }
+      break;
+    case "note":
+      if (nextValue === (current.note || "")) {
+        return;
+      }
+      nextBlock.note = nextValue;
+      break;
+    default:
+      return;
+  }
+
+  const nextBlocks = [...blocks];
+  nextBlocks[index] = nextBlock;
+  const updatedAt = new Date().toISOString();
+  tutorial.extraContent = normalizeExtraContentBlocks(nextBlocks);
+  tutorial.updatedAt = updatedAt;
+
+  const payload = {
+    ...tutorial,
+    extraContent: tutorial.extraContent,
+    updatedAt,
+  };
+  try {
+    await apiUpdateTutorial(tutorialId, payload);
+    setSyncStatus(`Guardado · ${new Date().toLocaleTimeString("es-BO", { hour: "2-digit", minute: "2-digit" })}`);
+    if (field === "type") {
+      render();
+    }
+  } catch (error) {
+    showOperationError(error, "No se pudo guardar el bloque.");
+    await refreshTutorials();
+  }
+}
+
+function renderExtraContentComposer(tutorial) {
+  const composer = state.extraComposer;
+  if (!composer || composer.tutorialId !== tutorial.id || composer.type !== "text") {
+    return "";
+  }
+
+  return `
+    <article class="detail-extra-composer">
+      <div class="detail-composer-tools">
+        <details class="row-menu row-menu-card detail-composer-menu">
+          <summary class="menu-trigger" aria-label="Opciones de seccion">···</summary>
+          <div class="row-menu-panel">
+            <p class="meta">Eliminar esta seccion de texto.</p>
+            <div class="menu-actions">
+              <button type="button" class="danger" data-discard-extra-composer="${tutorial.id}">Eliminar seccion</button>
+            </div>
+          </div>
+        </details>
+      </div>
+      <label class="detail-composer-field">
+        <input
+          class="detail-composer-title-input"
+          type="text"
+          data-extra-field="caption"
+          placeholder="Insertar titulo"
+          value="${escapeAttribute(composer.caption || "")}"
+        />
+      </label>
+      <label class="detail-composer-field">
+        <textarea class="detail-composer-text-input" data-extra-field="text" placeholder="Insertar texto">${escapeHtml(composer.text || "")}</textarea>
+      </label>
+    </article>
+  `;
+}
+
+function openExtraContentComposer(tutorialId, type) {
+  if (!tutorialId || !["image", "video", "text"].includes(type || "")) {
+    return;
+  }
+  if (type === "image" || type === "video") {
+    openExtraMediaDialog(tutorialId, type);
+    return;
+  }
+  const tutorial = state.tutorials.find((item) => item.id === tutorialId);
+  const blocks = normalizeExtraContentBlocks(tutorial?.extraContent);
+  const latest = blocks.filter((block) => block.type === "text").pop() || null;
+  const draft = loadLiveTextDraft(tutorialId);
+  state.extraComposer = {
+    tutorialId,
+    type,
+    url: "",
+    text: draft?.text ?? latest?.text ?? "",
+    caption: draft?.caption ?? latest?.caption ?? "",
+    blockId: draft?.blockId || latest?.id || null,
+  };
+  render();
+}
+
+function closeExtraContentComposer() {
+  if (state.extraComposer?.type === "text") {
+    persistLiveTextDraft(state.extraComposer.tutorialId, state.extraComposer);
+  }
+  state.extraComposer = null;
+  if (extraComposerAutosaveTimer) {
+    window.clearTimeout(extraComposerAutosaveTimer);
+    extraComposerAutosaveTimer = null;
+  }
+  render();
+}
+
+async function discardExtraContentComposer(tutorialId) {
+  const composer = state.extraComposer;
+  if (!composer || composer.tutorialId !== tutorialId || composer.type !== "text") {
+    return;
+  }
+  const shouldDelete = window.confirm("Eliminar esta seccion de texto? Esta accion no se puede deshacer.");
+  if (!shouldDelete) {
+    return;
+  }
+  if (extraComposerAutosaveTimer) {
+    window.clearTimeout(extraComposerAutosaveTimer);
+    extraComposerAutosaveTimer = null;
+  }
+
+  const tutorial = state.tutorials.find((item) => item.id === tutorialId);
+  if (!tutorial) {
+    state.extraComposer = null;
+    render();
+    return;
+  }
+
+  const blocks = normalizeExtraContentBlocks(tutorial.extraContent);
+  const nextBlocks = composer.blockId ? blocks.filter((block) => block.id !== composer.blockId) : blocks;
+  state.extraComposer = null;
+  clearLiveTextDraft(tutorialId);
+  if (nextBlocks.length === blocks.length) {
+    render();
+    return;
+  }
+
+  const updatedAt = new Date().toISOString();
+  const payload = {
+    ...tutorial,
+    extraContent: nextBlocks,
+    updatedAt,
+  };
+  try {
+    await apiUpdateTutorial(tutorialId, payload);
+    tutorial.extraContent = payload.extraContent;
+    tutorial.updatedAt = updatedAt;
+    clearLiveTextDraft(tutorialId);
+    setSyncStatus(`Seccion eliminada · ${new Date().toLocaleTimeString("es-BO", { hour: "2-digit", minute: "2-digit" })}`);
+    render();
+  } catch (error) {
+    showOperationError(error, "No se pudo eliminar la seccion de texto.");
+  }
+}
+
+function scheduleExtraComposerAutosave(tutorialId) {
+  if (!tutorialId || !state.extraComposer || state.extraComposer.type !== "text") {
+    return;
+  }
+  if (extraComposerAutosaveTimer) {
+    window.clearTimeout(extraComposerAutosaveTimer);
+  }
+  extraComposerAutosaveTimer = window.setTimeout(() => {
+    void autosaveExtraComposerText(tutorialId);
+  }, 260);
+}
+
+async function autosaveExtraComposerText(tutorialId) {
+  const composer = state.extraComposer;
+  if (!composer || composer.tutorialId !== tutorialId || composer.type !== "text") {
+    return;
+  }
+  const tutorial = state.tutorials.find((item) => item.id === tutorialId);
+  if (!tutorial) {
+    return;
+  }
+  const text = String(composer.text || "");
+  const caption = String(composer.caption || "").trim();
+  const blocks = normalizeExtraContentBlocks(tutorial.extraContent);
+  const blockId = composer.blockId || createId();
+  composer.blockId = blockId;
+  let nextBlocks = [...blocks];
+  if (!text.trim()) {
+    nextBlocks = nextBlocks.filter((block) => block.id !== blockId);
+    composer.blockId = null;
+    if (nextBlocks.length === blocks.length) {
+      return;
+    }
+  } else {
+    const nextBlock = {
+      id: blockId,
+      type: "text",
+      text,
+      caption,
+      createdAt: new Date().toISOString(),
+    };
+    const idx = nextBlocks.findIndex((block) => block.id === blockId);
+    if (idx >= 0) {
+      nextBlocks[idx] = nextBlock;
+    } else {
+      nextBlocks.push(nextBlock);
+    }
+  }
+
+  const updatedAt = new Date().toISOString();
+  const payload = {
+    ...tutorial,
+    extraContent: normalizeExtraContentBlocks(nextBlocks),
+    updatedAt,
+  };
+
+  try {
+    await apiUpdateTutorial(tutorialId, payload);
+    tutorial.extraContent = payload.extraContent;
+    tutorial.updatedAt = updatedAt;
+    setSyncStatus(`Guardado · ${new Date().toLocaleTimeString("es-BO", { hour: "2-digit", minute: "2-digit" })}`);
+  } catch (error) {
+    showOperationError(error, "No se pudo guardar el texto adicional.");
+  }
+}
+
+async function saveExtraContentComposer(tutorialId) {
+  const composer = state.extraComposer;
+  if (!composer || composer.tutorialId !== tutorialId) {
+    return;
+  }
+  if (!tutorialId || !["image", "video", "text"].includes(composer.type || "")) {
+    return;
+  }
+  const tutorial = state.tutorials.find((item) => item.id === tutorialId);
+  if (!tutorial) {
+    return;
+  }
+
+  const caption = (composer.caption || "").trim();
+  let block = null;
+  if (composer.type === "text") {
+    const text = (composer.text || "").trim();
+    if (!text) {
+      window.alert("El texto no puede estar vacio.");
+      return;
+    }
+    block = {
+      id: createId(),
+      type: "text",
+      text,
+      caption,
+      createdAt: new Date().toISOString(),
+    };
+  } else {
+    const url = (composer.url || "").trim();
+    if (!url) {
+      window.alert("Debes escribir una URL valida.");
+      return;
+    }
+    block = {
+      id: createId(),
+      type: composer.type,
+      url,
+      caption,
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  const nextBlocks = normalizeExtraContentBlocks([...(tutorial.extraContent || []), block]);
+  const payload = {
+    ...tutorial,
+    extraContent: nextBlocks,
+    updatedAt: new Date().toISOString(),
+  };
+
+  try {
+    await apiUpdateTutorial(tutorialId, payload);
+    state.selectedId = tutorialId;
+    state.extraComposer = null;
+    await refreshTutorials();
+  } catch (error) {
+    showOperationError(error, "No se pudo agregar el bloque de contenido.");
+  }
+}
+
+function openExtraMediaDialog(tutorialId, type) {
+  if (!refs.extraMediaDialog?.showModal) {
+    return;
+  }
+  const normalizedType = type === "video" ? "video" : "image";
+  state.extraMediaContext = {
+    tutorialId,
+    type: normalizedType,
+    mode: "url",
+  };
+  refs.extraMediaTitle.textContent = normalizedType === "image" ? "Agregar imagenes" : "Agregar video";
+  refs.extraMediaUrlInput.value = "";
+  refs.extraMediaUrlInput.placeholder = normalizedType === "image" ? "https://... (una por linea)" : "https://...";
+  refs.extraMediaCaptionInput.value = "";
+  refs.extraMediaFileInput.value = "";
+  if (refs.extraMediaTimestampsInput) {
+    refs.extraMediaTimestampsInput.value = "";
+  }
+  setExtraMediaDialogStatus("");
+  setExtraMediaDialogMode("url");
+  if (!refs.extraMediaDialog.open) {
+    refs.extraMediaDialog.showModal();
+  }
+}
+
+function setExtraMediaDialogMode(mode) {
+  const next = mode === "upload" ? "upload" : "url";
+  if (!state.extraMediaContext) {
+    return;
+  }
+  state.extraMediaContext.mode = next;
+  refs.extraMediaModeButtons.forEach((button) => {
+    const active = button.dataset.extraMediaMode === next;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+  refs.extraMediaUrlField.classList.toggle("hidden", next !== "url");
+  refs.extraMediaFileField.classList.toggle("hidden", next !== "upload");
+  const isVideo = state.extraMediaContext.type === "video";
+  refs.extraMediaTimestampsField?.classList.toggle("hidden", !isVideo);
+  if (refs.extraMediaUrlInput) {
+    refs.extraMediaUrlInput.placeholder = isVideo ? "https://..." : "https://... (una por linea)";
+  }
+  if (refs.extraMediaFileInput) {
+    refs.extraMediaFileInput.accept = isVideo ? "video/*" : "image/*";
+    refs.extraMediaFileInput.multiple = !isVideo;
+  }
+}
+
+function setExtraMediaDialogStatus(message, isError = false) {
+  if (!refs.extraMediaStatus) {
+    return;
+  }
+  refs.extraMediaStatus.textContent = message;
+  refs.extraMediaStatus.classList.toggle("is-error", Boolean(isError));
+}
+
+function closeExtraMediaDialog() {
+  if (refs.extraMediaDialog?.open) {
+    refs.extraMediaDialog.close();
+  }
+  state.extraMediaContext = null;
+  if (refs.extraMediaFileInput) {
+    refs.extraMediaFileInput.value = "";
+  }
+  if (refs.extraMediaUrlInput) {
+    refs.extraMediaUrlInput.value = "";
+  }
+  if (refs.extraMediaCaptionInput) {
+    refs.extraMediaCaptionInput.value = "";
+  }
+  if (refs.extraMediaTimestampsInput) {
+    refs.extraMediaTimestampsInput.value = "";
+  }
+  setExtraMediaDialogStatus("");
+}
+
+function collectMediaUrlsFromInput(rawValue, allowMultiple) {
+  const raw = String(rawValue || "").trim();
+  if (!raw) {
+    return [];
+  }
+  const chunks = raw
+    .split(/\r?\n|,/)
+    .map((entry) => String(entry || "").trim())
+    .filter(Boolean);
+  if (!allowMultiple) {
+    return chunks.length ? [chunks[0]] : [];
+  }
+  return chunks;
+}
+
+function parseTimestampLines(rawValue) {
+  const lines = String(rawValue || "")
+    .split(/\r?\n/)
+    .map((entry) => String(entry || "").trim())
+    .filter(Boolean);
+  return normalizeTimestampEntries(lines);
+}
+
+async function saveExtraMediaFromDialog() {
+  const context = state.extraMediaContext;
+  if (!context) {
+    return;
+  }
+  const tutorial = state.tutorials.find((item) => item.id === context.tutorialId);
+  if (!tutorial) {
+    closeExtraMediaDialog();
+    return;
+  }
+
+  const caption = refs.extraMediaCaptionInput.value.trim();
+  const timestamps = context.type === "video" ? parseTimestampLines(refs.extraMediaTimestampsInput?.value || "") : [];
+  const blocksToAdd = [];
+  refs.saveExtraMediaButton.disabled = true;
+  try {
+    if (context.mode === "url") {
+      const urls = collectMediaUrlsFromInput(refs.extraMediaUrlInput.value, context.type === "image");
+      if (!urls.length) {
+        setExtraMediaDialogStatus("Debes ingresar una URL valida.", true);
+        return;
+      }
+      urls.forEach((url) => {
+        blocksToAdd.push({
+          id: createId(),
+          type: context.type,
+          url,
+          caption,
+          note: "",
+          timestamps: context.type === "video" ? timestamps : [],
+          createdAt: new Date().toISOString(),
+        });
+      });
+    } else {
+      let files = Array.from(refs.extraMediaFileInput.files || []);
+      if (!files.length) {
+        setExtraMediaDialogStatus("Selecciona un archivo.", true);
+        return;
+      }
+      if (context.type === "video") {
+        files = [files[0]];
+      }
+      for (const file of files) {
+        if (context.type === "image" && !file.type.startsWith("image/")) {
+          setExtraMediaDialogStatus("Debes seleccionar imagenes.", true);
+          return;
+        }
+        if (context.type === "video" && !file.type.startsWith("video/")) {
+          setExtraMediaDialogStatus("Debes seleccionar un video.", true);
+          return;
+        }
+      }
+
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index];
+        setExtraMediaDialogStatus(
+          files.length > 1 ? `Subiendo ${index + 1}/${files.length}: ${file.name}` : `Subiendo ${file.name}`
+        );
+        const uploaded = await apiUploadFile(file, (percent) => {
+          setExtraMediaDialogStatus(
+            files.length > 1
+              ? `Subiendo ${index + 1}/${files.length}: ${percent}%`
+              : `Subiendo archivo... ${percent}%`
+          );
+        });
+        blocksToAdd.push({
+          id: createId(),
+          type: context.type,
+          url: uploaded.url,
+          caption,
+          note: "",
+          timestamps: context.type === "video" ? timestamps : [],
+          createdAt: new Date().toISOString(),
+        });
+      }
+    }
+
+    if (!blocksToAdd.length) {
+      setExtraMediaDialogStatus("No se pudo crear el adjunto.", true);
+      return;
+    }
+
+    const nextBlocks = normalizeExtraContentBlocks([...(tutorial.extraContent || []), ...blocksToAdd]);
+    const updatedAt = new Date().toISOString();
+    const payload = {
+      ...tutorial,
+      extraContent: nextBlocks,
+      updatedAt,
+    };
+    await apiUpdateTutorial(context.tutorialId, payload);
+    tutorial.extraContent = payload.extraContent;
+    tutorial.updatedAt = updatedAt;
+    if (context.type === "image") {
+      const totalImages = nextBlocks.filter((item) => item.type === "image").length;
+      if (totalImages) {
+        state.mediaCarouselIndexByTutorial[context.tutorialId] = totalImages - 1;
+      }
+    }
+    state.selectedId = context.tutorialId;
+    setSyncStatus(`Guardado · ${new Date().toLocaleTimeString("es-BO", { hour: "2-digit", minute: "2-digit" })}`);
+    closeExtraMediaDialog();
+    render();
+  } catch (error) {
+    setExtraMediaDialogStatus(resolveError(error, "No se pudo agregar el contenido."), true);
+  } finally {
+    refs.saveExtraMediaButton.disabled = false;
+  }
+}
+
+async function removeExtraContentBlock(tutorialId, blockId) {
+  if (!tutorialId || !blockId) {
+    return;
+  }
+  const tutorial = state.tutorials.find((item) => item.id === tutorialId);
+  if (!tutorial) {
+    return;
+  }
+  const blocks = normalizeExtraContentBlocks(tutorial.extraContent);
+  const nextBlocks = blocks.filter((block) => block.id !== blockId);
+  if (nextBlocks.length === blocks.length) {
+    return;
+  }
+  if (!window.confirm("Eliminar este bloque de contenido adicional?")) {
+    return;
+  }
+
+  const payload = {
+    ...tutorial,
+    extraContent: nextBlocks,
+    updatedAt: new Date().toISOString(),
+  };
+  try {
+    await apiUpdateTutorial(tutorialId, payload);
+    state.selectedId = tutorialId;
+    await refreshTutorials();
+  } catch (error) {
+    showOperationError(error, "No se pudo eliminar el bloque adicional.");
+  }
+}
+
+async function addEditorTextBlock(tutorialId) {
+  if (!tutorialId) {
+    return;
+  }
+  const tutorial = state.tutorials.find((item) => item.id === tutorialId);
+  if (!tutorial) {
+    return;
+  }
+  const nextBlocks = normalizeExtraContentBlocks([
+    ...(tutorial.extraContent || []),
+    {
+      id: createId(),
+      type: "text",
+      text: "Nuevo bloque de texto",
+      caption: "",
+      note: "",
+      createdAt: new Date().toISOString(),
+    },
+  ]);
+  const updatedAt = new Date().toISOString();
+  const payload = {
+    ...tutorial,
+    extraContent: nextBlocks,
+    updatedAt,
+  };
+  try {
+    await apiUpdateTutorial(tutorialId, payload);
+    tutorial.extraContent = payload.extraContent;
+    tutorial.updatedAt = updatedAt;
+    setSyncStatus(`Guardado · ${new Date().toLocaleTimeString("es-BO", { hour: "2-digit", minute: "2-digit" })}`);
+    render();
+  } catch (error) {
+    showOperationError(error, "No se pudo agregar el bloque de texto.");
+  }
 }
 
 function renderEmptyInto(container) {
@@ -2255,6 +4800,7 @@ async function upsertTutorialFromForm() {
     tags: parseTags(f.tags.value),
     notes: f.notes.value.trim(),
     timestamps: f.timestamps.value.split("\n").map((line) => line.trim()).filter(Boolean),
+    extraContent: current ? normalizeExtraContentBlocks(current.extraContent) : [],
     updatedAt: now,
   };
 
@@ -2834,6 +5380,159 @@ function showOperationError(error, fallback) {
   window.alert(resolveError(error, fallback));
 }
 
+function liveTextDraftStorageKey(tutorialId) {
+  const userId = state.currentUser?.id || "guest";
+  return `tv_live_text_draft_${userId}_${tutorialId}`;
+}
+
+function persistLiveTextDraft(tutorialId, composer) {
+  if (!tutorialId || !composer || composer.type !== "text") {
+    return;
+  }
+  try {
+    const payload = {
+      blockId: typeof composer.blockId === "string" ? composer.blockId : null,
+      text: String(composer.text || ""),
+      caption: String(composer.caption || ""),
+      updatedAt: Date.now(),
+    };
+    localStorage.setItem(liveTextDraftStorageKey(tutorialId), JSON.stringify(payload));
+  } catch {}
+}
+
+function loadLiveTextDraft(tutorialId) {
+  if (!tutorialId) {
+    return null;
+  }
+  try {
+    const raw = localStorage.getItem(liveTextDraftStorageKey(tutorialId));
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+    const text = typeof parsed.text === "string" ? parsed.text : "";
+    const caption = typeof parsed.caption === "string" ? parsed.caption : "";
+    const blockId = typeof parsed.blockId === "string" ? parsed.blockId : "";
+    if (!text && !caption && !blockId) {
+      return null;
+    }
+    return { text, caption, blockId };
+  } catch {
+    return null;
+  }
+}
+
+function clearLiveTextDraft(tutorialId) {
+  if (!tutorialId) {
+    return;
+  }
+  try {
+    localStorage.removeItem(liveTextDraftStorageKey(tutorialId));
+  } catch {}
+}
+
+function autoGrowTextarea(textarea, minHeight = 80) {
+  if (!(textarea instanceof HTMLTextAreaElement)) {
+    return;
+  }
+  textarea.style.height = "0px";
+  const next = Math.max(minHeight, textarea.scrollHeight || 0);
+  textarea.style.height = `${next}px`;
+}
+
+function clearAutosaveTimers() {
+  if (notesAutosaveTimer) {
+    window.clearTimeout(notesAutosaveTimer);
+    notesAutosaveTimer = null;
+  }
+  if (extraComposerAutosaveTimer) {
+    window.clearTimeout(extraComposerAutosaveTimer);
+    extraComposerAutosaveTimer = null;
+  }
+  if (extraBlockAutosaveTimers.size) {
+    extraBlockAutosaveTimers.forEach((timer) => window.clearTimeout(timer));
+    extraBlockAutosaveTimers.clear();
+  }
+  if (tutorialEditorAutosaveTimers.size) {
+    tutorialEditorAutosaveTimers.forEach((timer) => window.clearTimeout(timer));
+    tutorialEditorAutosaveTimers.clear();
+  }
+}
+
+async function flushPendingAutosaves() {
+  if (!state.currentUser) {
+    return;
+  }
+  const tasks = [];
+  if (notesAutosaveTimer) {
+    window.clearTimeout(notesAutosaveTimer);
+    notesAutosaveTimer = null;
+    if (state.selectedId) {
+      const notesField = refs.detailPanel.querySelector(`[data-notes-editor-id="${state.selectedId}"]`);
+      if (notesField instanceof HTMLTextAreaElement) {
+        tasks.push(saveDetailNotesAutosave(state.selectedId, notesField.value));
+      }
+    }
+  }
+  if (extraComposerAutosaveTimer && state.extraComposer?.type === "text") {
+    window.clearTimeout(extraComposerAutosaveTimer);
+    extraComposerAutosaveTimer = null;
+    tasks.push(autosaveExtraComposerText(state.extraComposer.tutorialId));
+  }
+  if (extraBlockAutosaveTimers.size) {
+    const entries = Array.from(extraBlockAutosaveTimers.entries());
+    extraBlockAutosaveTimers.clear();
+    entries.forEach(([key, timer]) => {
+      window.clearTimeout(timer);
+      const [tutorialId, blockId, field] = String(key || "").split(":");
+      if (!tutorialId || !blockId || !field) {
+        return;
+      }
+      const selector = `[data-extra-block-note-id="${blockId}"][data-extra-block-tutorial-id="${tutorialId}"]`;
+      const editor = refs.detailPanel.querySelector(selector);
+      if (editor instanceof HTMLTextAreaElement) {
+        tasks.push(saveExtraBlockField(tutorialId, blockId, field, editor.value));
+      }
+    });
+  }
+  if (tutorialEditorAutosaveTimers.size) {
+    const entries = Array.from(tutorialEditorAutosaveTimers.entries());
+    tutorialEditorAutosaveTimers.clear();
+    entries.forEach(([key, timer]) => {
+      window.clearTimeout(timer);
+      const parts = String(key || "").split(":");
+      if (parts[0] === "p") {
+        const [, tutorialId, field] = parts;
+        if (!tutorialId || !field) {
+          return;
+        }
+        const input = refs.detailPanel.querySelector(`[data-editor-primary-field="${field}"]`);
+        if (input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement || input instanceof HTMLSelectElement) {
+          tasks.push(saveTutorialEditorPrimaryField(tutorialId, field, input.value));
+        }
+        return;
+      }
+      if (parts[0] === "e") {
+        const [, tutorialId, blockId, field] = parts;
+        if (!tutorialId || !blockId || !field) {
+          return;
+        }
+        const selector = `[data-editor-extra-field="${field}"][data-editor-extra-tutorial-id="${tutorialId}"][data-editor-extra-block-id="${blockId}"]`;
+        const input = refs.detailPanel.querySelector(selector);
+        if (input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement || input instanceof HTMLSelectElement) {
+          tasks.push(saveTutorialEditorExtraField(tutorialId, blockId, field, input.value));
+        }
+      }
+    });
+  }
+  if (tasks.length) {
+    await Promise.allSettled(tasks);
+  }
+}
+
 async function refreshTutorials() {
   if (!state.currentUser) {
     return;
@@ -2845,6 +5544,10 @@ async function refreshTutorials() {
     if (!state.selectedId || !state.tutorials.some((t) => t.id === state.selectedId)) {
       state.selectedId = state.tutorials[0]?.id || null;
     }
+    if (state.page === "tutorial" && !state.selectedId) {
+      state.page = "library";
+    }
+    syncRouteToLocation(true);
     setSyncStatus(`Sincronizado · ${new Date().toLocaleTimeString("es-BO", { hour: "2-digit", minute: "2-digit" })}`);
     checkAndNotifyReminders();
   } catch (error) {
@@ -2852,6 +5555,51 @@ async function refreshTutorials() {
   } finally {
     render();
   }
+}
+
+function normalizeTimestampEntries(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .slice(0, 200)
+    .map((entry) => String(entry || "").trim().slice(0, 120))
+    .filter(Boolean);
+}
+
+function normalizeExtraContentBlocks(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+      const type = String(item.type || "").trim();
+      if (!["image", "video", "text"].includes(type)) {
+        return null;
+      }
+      const id = typeof item.id === "string" && item.id ? item.id : createId();
+      const caption = typeof item.caption === "string" ? item.caption : "";
+      const note = typeof item.note === "string" ? item.note : "";
+      const createdAt = typeof item.createdAt === "string" ? item.createdAt : new Date().toISOString();
+      if (type === "text") {
+        const text = typeof item.text === "string" ? item.text : "";
+        if (!text.trim()) {
+          return null;
+        }
+        return { id, type, text, caption, note, createdAt };
+      }
+      const url = typeof item.url === "string" ? item.url : "";
+      if (!url.trim()) {
+        return null;
+      }
+      const timestamps = type === "video" ? normalizeTimestampEntries(item.timestamps) : [];
+      return { id, type, url, caption, note, timestamps, createdAt };
+    })
+    .filter(Boolean)
+    .slice(0, 60);
 }
 
 function normalizeTutorial(item) {
@@ -2874,6 +5622,7 @@ function normalizeTutorial(item) {
     tags: Array.isArray(item.tags) ? item.tags.filter((tag) => typeof tag === "string") : [],
     notes: typeof item.notes === "string" ? item.notes : "",
     timestamps: Array.isArray(item.timestamps) ? item.timestamps.filter((entry) => typeof entry === "string") : [],
+    extraContent: normalizeExtraContentBlocks(item.extraContent),
     createdAt: typeof item.createdAt === "string" ? item.createdAt : now,
     updatedAt: typeof item.updatedAt === "string" ? item.updatedAt : now,
   };

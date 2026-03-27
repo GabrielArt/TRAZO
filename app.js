@@ -33,6 +33,7 @@ const state = {
   theme: getInitialTheme(),
   notesSide: getInitialNotesSide(),
   tutorialEditMode: false,
+  editorMiniMapOpen: true,
   editingId: null,
   selectedId: null,
   selectedIds: new Set(),
@@ -710,6 +711,12 @@ async function onActionClick(event) {
     render();
     return;
   }
+  const toggleMiniMapTarget = event.target.closest("[data-toggle-editor-mini-map]");
+  if (toggleMiniMapTarget) {
+    state.editorMiniMapOpen = !state.editorMiniMapOpen;
+    render();
+    return;
+  }
   const addEditorTextTarget = event.target.closest("[data-editor-add-text-id]");
   if (addEditorTextTarget) {
     await addEditorTextBlock(addEditorTextTarget.dataset.editorAddTextId);
@@ -907,29 +914,40 @@ function onTutorialPageInput(event) {
 }
 
 function findExtraModuleElement(target) {
-  return target?.closest?.("[data-extra-module-id]") || null;
+  return target?.closest?.("[data-extra-module-id], [data-mini-module-id]") || null;
+}
+
+function getModuleDragMeta(element) {
+  if (!(element instanceof HTMLElement)) {
+    return null;
+  }
+  const blockId = element.dataset.extraModuleId || element.dataset.miniModuleId || "";
+  const tutorialId = element.dataset.extraModuleTutorialId || element.dataset.miniModuleTutorialId || "";
+  if (!blockId || !tutorialId) {
+    return null;
+  }
+  return { tutorialId, blockId };
 }
 
 function onTutorialPageDragStart(event) {
   if (!state.tutorialEditMode) {
     return;
   }
-  const dragHandle = event.target?.closest?.("[data-extra-drag-handle]");
+  const dragHandle = event.target?.closest?.("[data-extra-drag-handle], [data-mini-drag-handle]");
   if (!dragHandle) {
     event.preventDefault();
     return;
   }
   const module = findExtraModuleElement(dragHandle);
-  if (!(module instanceof HTMLElement)) {
+  const meta = getModuleDragMeta(module);
+  if (!meta) {
     return;
   }
-  const tutorialId = module.dataset.extraModuleTutorialId;
-  const blockId = module.dataset.extraModuleId;
-  if (!tutorialId || !blockId) {
-    return;
-  }
+  const { tutorialId, blockId } = meta;
   activeDraggedExtraBlock = { tutorialId, blockId };
-  module.classList.add("is-dragging");
+  if (module instanceof HTMLElement) {
+    module.classList.add("is-dragging");
+  }
   if (event.dataTransfer) {
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", blockId);
@@ -944,16 +962,19 @@ function onTutorialPageDragOver(event) {
     return;
   }
   const target = findExtraModuleElement(event.target);
-  if (!(target instanceof HTMLElement)) {
+  const meta = getModuleDragMeta(target);
+  if (!meta) {
     return;
   }
-  const targetBlockId = target.dataset.extraModuleId;
+  const targetBlockId = meta.blockId;
   if (!targetBlockId || targetBlockId === activeDraggedExtraBlock.blockId) {
     return;
   }
   event.preventDefault();
   clearExtraModuleDropState();
-  target.classList.add("is-drop-target");
+  if (target instanceof HTMLElement) {
+    target.classList.add("is-drop-target");
+  }
 }
 
 async function onTutorialPageDrop(event) {
@@ -964,11 +985,12 @@ async function onTutorialPageDrop(event) {
     return;
   }
   const target = findExtraModuleElement(event.target);
-  if (!(target instanceof HTMLElement)) {
+  const meta = getModuleDragMeta(target);
+  if (!meta) {
     onTutorialPageDragEnd();
     return;
   }
-  const targetBlockId = target.dataset.extraModuleId;
+  const targetBlockId = meta.blockId;
   if (!targetBlockId || targetBlockId === activeDraggedExtraBlock.blockId) {
     onTutorialPageDragEnd();
     return;
@@ -2886,6 +2908,7 @@ function renderTutorialEditorPanel() {
   const modulesHtml = blocks.length
     ? blocks.map((block, index) => renderEditorExtraModule(tutorial.id, block, index + 1, blocks.length)).join("")
     : `<p class="meta">Aun no hay bloques adicionales.</p>`;
+  const miniMapHtml = renderEditorMiniMap(tutorial, blocks);
 
   refs.detailPanel.innerHTML = `
     <article class="detail-layout tutorial-editor-layout">
@@ -2897,6 +2920,7 @@ function renderTutorialEditorPanel() {
         </div>
         <div class="detail-actions">
           <button type="button" data-toggle-notes-side="1">${state.notesSide === "left" ? "Notas a la derecha" : "Notas a la izquierda"}</button>
+          <button type="button" data-toggle-editor-mini-map="1">${state.editorMiniMapOpen ? "Ocultar miniatura" : "Ver miniatura"}</button>
           <button type="button" data-close-tutorial-editor="1">Ver pagina</button>
         </div>
       </header>
@@ -2919,6 +2943,8 @@ function renderTutorialEditorPanel() {
           </div>
         </section>
       </section>
+
+      ${miniMapHtml}
     </article>
   `;
 
@@ -3073,6 +3099,62 @@ function renderEditorExtraModule(tutorialId, block, order, total) {
             placeholder="Notas del bloque..."
           >${escapeHtml(block.note || "")}</textarea>
         </section>
+      </div>
+    </article>
+  `;
+}
+
+function renderEditorMiniMap(tutorial, blocks) {
+  if (!state.editorMiniMapOpen) {
+    return "";
+  }
+  const cards = [
+    renderEditorMiniMapCard({
+      tutorialId: tutorial.id,
+      blockId: "",
+      order: 1,
+      type: tutorial.type,
+      isPrimary: true,
+      isDraggable: false,
+    }),
+    ...blocks.map((block, index) =>
+      renderEditorMiniMapCard({
+        tutorialId: tutorial.id,
+        blockId: block.id,
+        order: index + 2,
+        type: block.type,
+        isPrimary: false,
+        isDraggable: true,
+      })
+    ),
+  ].join("");
+
+  return `
+    <aside class="editor-mini-map-floating" aria-label="Miniatura de secciones">
+      <header class="editor-mini-map-head">
+        <h4>Miniatura</h4>
+      </header>
+      <div class="editor-mini-map-list">
+        ${cards}
+      </div>
+    </aside>
+  `;
+}
+
+function renderEditorMiniMapCard({ tutorialId, blockId, order, type, isPrimary, isDraggable }) {
+  const typeClass = type === "video" ? "is-video" : type === "image" ? "is-image" : "is-text";
+  const mediaClass = type === "text" ? "is-text" : "is-media";
+  const draggableAttr = isDraggable ? `draggable="true"` : "";
+  const dataAttrs = isDraggable ? `data-mini-module-id="${blockId}" data-mini-module-tutorial-id="${tutorialId}"` : "";
+  return `
+    <article class="mini-layout-card ${typeClass} ${isPrimary ? "is-primary" : ""}" ${draggableAttr} ${dataAttrs}>
+      <div class="mini-layout-top">
+        <span class="mini-layout-index">${order}</span>
+        ${isDraggable ? `<button type="button" class="mini-layout-drag" data-mini-drag-handle="1" aria-label="Arrastrar">::</button>` : `<span class="mini-layout-lock">#</span>`}
+      </div>
+      <div class="mini-layout-shell ${state.notesSide === "left" ? "is-notes-left" : ""}">
+        <span class="mini-layout-box mini-layout-media ${mediaClass}"></span>
+        <span class="mini-layout-box mini-layout-note"></span>
       </div>
     </article>
   `;

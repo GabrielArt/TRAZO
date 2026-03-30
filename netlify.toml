@@ -6,19 +6,19 @@ command = "echo Static deploy listo"
 # Ejemplo: https://trazo-api.onrender.com
 [[redirects]]
 from = "/api/*"
-to = "https://REPLACE_WITH_BACKEND_DOMAIN/api/:splat"
+to = "https://trazo-api.onrender.com/api/:splat"
 status = 200
 force = true
 
 [[redirects]]
 from = "/uploads/*"
-to = "https://REPLACE_WITH_BACKEND_DOMAIN/uploads/:splat"
+to = "https://trazo-api.onrender.com/uploads/:splat"
 status = 200
 force = true
 
 [[redirects]]
 from = "/oauth/*"
-to = "https://REPLACE_WITH_BACKEND_DOMAIN/oauth/:splat"
+to = "https://trazo-api.onrender.com/oauth/:splat"
 status = 200
 force = true
 

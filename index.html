@@ -18,6 +18,9 @@
             <p class="brand-title">TRAZO</p>
             <p class="brand-subtitle">Biblioteca personal</p>
           </div>
+          <button class="ghost-btn sidebar-toggle-btn" type="button" id="toggleSidebarButton" aria-label="Plegar menu lateral">
+            ≡
+          </button>
         </div>
 
         <nav class="sidebar-nav">
@@ -43,8 +46,17 @@
           <button type="button" class="nav-item" id="settingsNavButton">Configuracion</button>
         </section>
       </aside>
+      <button
+        class="sidebar-backdrop hidden"
+        type="button"
+        id="sidebarBackdrop"
+        aria-label="Cerrar menu lateral"
+      ></button>
 
       <main class="workspace">
+        <button class="ghost-btn sidebar-expand-btn hidden" type="button" id="sidebarExpandButton" aria-label="Mostrar menu lateral">
+          ≡
+        </button>
         <section id="authGate" class="auth-gate hidden">
           <div class="auth-card">
             <p class="eyebrow">Acceso</p>
@@ -222,6 +234,85 @@
                       <input id="importInput" type="file" accept=".json" hidden />
                     </div>
                   </article>
+
+                  <article class="settings-card">
+                    <h3>Sincronizacion y almacenamiento</h3>
+                    <p class="meta">
+                      Configura almacenamiento local, nube y sincronizacion entre dispositivos. Puedes elegir que tutoriales se sincronizan.
+                    </p>
+                    <div class="form-grid">
+                      <label>
+                        Modo de almacenamiento
+                        <select id="storageModeSelect">
+                          <option value="device">Solo dispositivo</option>
+                          <option value="cloud">Nube</option>
+                          <option value="peer">Dispositivo a dispositivo</option>
+                          <option value="hybrid">Hibrido (dispositivo + nube)</option>
+                        </select>
+                      </label>
+                      <label>
+                        Proveedor nube
+                        <select id="cloudProviderSelect">
+                          <option value="none">Sin proveedor</option>
+                          <option value="google_drive">Google Drive</option>
+                          <option value="supabase">Supabase</option>
+                        </select>
+                      </label>
+                      <label class="full-width">
+                        Carpeta local principal
+                        <input
+                          id="localRootPathInput"
+                          type="text"
+                          placeholder="Ej: C:\\Tutoriales\\TRAZO o ./mi_carpeta_trazo"
+                        />
+                      </label>
+                      <label class="full-width">
+                        Carpeta nube / prefijo remoto
+                        <input
+                          id="cloudRootPathInput"
+                          type="text"
+                          placeholder="Ej: TRAZO o trazo"
+                        />
+                      </label>
+                    </div>
+                    <div class="settings-actions">
+                      <button class="ghost-btn" type="button" id="pickLocalFolderButton">Elegir carpeta local</button>
+                      <button class="ghost-btn" type="button" id="createLocalFolderButton">Crear carpeta local</button>
+                    </div>
+                    <div class="settings-actions">
+                      <button class="ghost-btn" type="button" id="connectCloudButton">Conectar Google Drive</button>
+                      <button class="ghost-btn" type="button" id="disconnectCloudButton">Desconectar proveedor</button>
+                    </div>
+                    <p id="cloudConnectionStatus" class="meta">Proveedor desactivado.</p>
+                    <div class="settings-actions">
+                      <label class="check-row">
+                        <input id="cloudSyncEnabled" type="checkbox" />
+                        Activar sincronizacion con nube
+                      </label>
+                      <label class="check-row">
+                        <input id="peerSyncEnabled" type="checkbox" />
+                        Activar sincronizacion entre dispositivos (beta)
+                      </label>
+                    </div>
+                    <div class="settings-actions">
+                      <button class="primary-btn" type="button" id="saveStorageSettingsButton">Guardar configuracion</button>
+                      <button class="ghost-btn" type="button" id="runStorageSyncButton">Sincronizar ahora</button>
+                      <button class="ghost-btn" type="button" id="exportDevicePackageButton">Exportar paquete (dispositivo)</button>
+                      <button class="ghost-btn" type="button" id="importDevicePackageButton">Importar paquete (dispositivo)</button>
+                      <input id="importDevicePackageInput" type="file" accept=".json" hidden />
+                    </div>
+                    <p id="syncNowHint" class="meta sync-now-hint"></p>
+                    <p id="storageSetupStatus" class="meta">Sin configurar.</p>
+                    <p id="storageRoutingHint" class="meta sync-route-hint"></p>
+                    <div class="sync-insight">
+                      <p id="lastSyncMeta" class="meta">Ultima sincronizacion: sin ejecuciones.</p>
+                      <ul id="lastSyncDetails" class="sync-detail-list"></ul>
+                    </div>
+                    <div class="full-width">
+                      <p class="section-title">Tutoriales sincronizados con nube</p>
+                      <div id="setupTutorialSyncList" class="saved-views-list"></div>
+                    </div>
+                  </article>
                 </section>
               </div>
             </div>
@@ -360,6 +451,65 @@
             </select>
           </label>
 
+          <label class="emoji-picker-label">
+            Emoji
+            <div class="emoji-picker-field">
+              <input id="emojiInput" name="emoji" maxlength="8" placeholder="Seleccionar simbolo" readonly />
+              <button
+                type="button"
+                id="emojiPickerToggle"
+                class="ghost-btn emoji-picker-toggle"
+                data-open-emoji-picker="1"
+                aria-haspopup="dialog"
+                aria-expanded="false"
+                aria-label="Abrir selector de emoji"
+              >
+                ☺
+              </button>
+            </div>
+            <section id="emojiPickerPanel" class="emoji-picker-panel hidden" role="dialog" aria-label="Emoji y mas">
+              <header class="emoji-picker-head">
+                <strong>Emoji y mas</strong>
+                <button type="button" class="ghost-btn emoji-picker-close" data-close-emoji-picker="1" aria-label="Cerrar">
+                  ×
+                </button>
+              </header>
+              <div class="emoji-picker-tabs" role="tablist" aria-label="Categorias de emoji">
+                <button type="button" class="emoji-picker-tab is-active" data-emoji-category="recent" title="Recientes">◷</button>
+                <button type="button" class="emoji-picker-tab" data-emoji-category="faces" title="Caras">☺</button>
+                <button type="button" class="emoji-picker-tab" data-emoji-category="symbols" title="Simbolos">✦</button>
+                <button type="button" class="emoji-picker-tab" data-emoji-category="shapes" title="Formas">◆</button>
+                <button type="button" class="emoji-picker-tab" data-emoji-category="arrows" title="Flechas">➜</button>
+                <button type="button" class="emoji-picker-tab" data-emoji-category="misc" title="Varios">⚙</button>
+              </div>
+              <label class="emoji-picker-search">
+                <input id="emojiPickerSearch" type="search" placeholder="Buscar emojis" autocomplete="off" />
+              </label>
+              <section class="emoji-picker-section">
+                <p class="emoji-picker-title">Recientes</p>
+                <div id="emojiPickerRecentGrid" class="emoji-picker-grid"></div>
+              </section>
+              <section class="emoji-picker-section">
+                <p id="emojiPickerCategoryTitle" class="emoji-picker-title">Categoria</p>
+                <div id="emojiPickerGrid" class="emoji-picker-grid"></div>
+                <p id="emojiPickerEmpty" class="meta hidden">No hay resultados para esa busqueda.</p>
+              </section>
+            </section>
+          </label>
+
+          <label>
+            Color emoji
+            <select name="emojiColor">
+              <option value="default">Neutro</option>
+              <option value="blue">Azul</option>
+              <option value="red">Rojo</option>
+              <option value="green">Verde</option>
+              <option value="yellow">Amarillo</option>
+              <option value="purple">Morado</option>
+              <option value="orange">Naranja</option>
+            </select>
+          </label>
+
           <label>
             Fuente
             <select name="source" id="sourceInput">
@@ -417,6 +567,7 @@
         <section class="full-width upload-zone" id="uploadDropZone">
           <p class="upload-title">Adjuntar archivo local</p>
           <p class="upload-copy">Arrastra una imagen, video o archivo de texto aqui para cargarlo.</p>
+          <p id="uploadLimitHint" class="upload-hint"></p>
           <div class="upload-actions">
             <button type="button" class="ghost-btn" id="uploadBrowseButton">Seleccionar archivo</button>
             <input
@@ -437,22 +588,26 @@
 
         <label class="full-width" id="textContentField">
           Contenido de texto
-          <textarea name="textContent" rows="5" placeholder="Pega aqui tus notas o tutorial en texto"></textarea>
-        </label>
-
-        <label class="full-width">
-          Notas
-          <textarea name="notes" rows="3" placeholder="Que aprendiste o como aplicarlo"></textarea>
-        </label>
-
-        <label class="full-width">
-          Timestamps (uno por linea)
           <textarea
-            name="timestamps"
-            rows="3"
-            placeholder="00:45 Intro&#10;03:10 Tecnica clave&#10;10:22 Ejemplo practico"
+            name="textContent"
+            rows="5"
+            placeholder="Pega aqui tus notas o tutorial en texto"
+            data-markdown-enabled="1"
           ></textarea>
         </label>
+
+        <section id="dialogMiniEditor" class="full-width dialog-mini-editor hidden">
+          <header class="dialog-mini-editor-head">
+            <h3>Estructura de pagina</h3>
+            <p>Arrastra para reordenar; en imagen y video puedes cambiar el lado de la nota.</p>
+          </header>
+          <div id="dialogMiniEditorContent"></div>
+          <div class="editor-add-row dialog-mini-editor-actions">
+            <button type="button" class="ghost-btn" id="dialogMiniAddImage">+ Imagen</button>
+            <button type="button" class="ghost-btn" id="dialogMiniAddVideo">+ Video</button>
+            <button type="button" class="ghost-btn" id="dialogMiniAddText">+ Texto</button>
+          </div>
+        </section>
 
         <footer class="dialog-footer">
           <button class="ghost-btn" id="deleteButton" type="button">Eliminar</button>
@@ -476,6 +631,58 @@
       </form>
     </dialog>
 
+    <dialog id="setupDialog" class="dialog extra-media-dialog">
+      <form id="setupForm" method="dialog" novalidate>
+        <header class="dialog-header">
+          <h2>Configuracion inicial</h2>
+          <button type="button" id="closeSetupButton" class="ghost-btn">Cerrar</button>
+        </header>
+        <p class="meta">
+          Elige donde se guarda tu contenido y si quieres sincronizar en nube o entre dispositivos.
+        </p>
+        <label class="full-width">
+          Modo
+          <select id="setupStorageMode">
+            <option value="device">Solo dispositivo</option>
+            <option value="cloud">Nube</option>
+            <option value="peer">Dispositivo a dispositivo</option>
+            <option value="hybrid">Hibrido</option>
+          </select>
+        </label>
+        <label class="full-width">
+          Carpeta local
+          <input id="setupLocalRootPath" type="text" placeholder="Ej: C:\\Tutoriales\\TRAZO o ./mi_carpeta_trazo" />
+        </label>
+        <label class="full-width">
+          Proveedor nube
+          <select id="setupCloudProvider">
+            <option value="none">Sin proveedor</option>
+            <option value="google_drive">Google Drive</option>
+            <option value="supabase">Supabase</option>
+          </select>
+        </label>
+        <label class="full-width">
+          Carpeta nube / prefijo remoto
+          <input id="setupCloudRootPath" type="text" placeholder="Ej: TRAZO o trazo" />
+        </label>
+        <label class="check-row full-width">
+          <input id="setupCloudSyncEnabled" type="checkbox" />
+          Activar sincronizacion nube
+        </label>
+        <label class="check-row full-width">
+          <input id="setupPeerSyncEnabled" type="checkbox" />
+          Activar sincronizacion entre dispositivos (beta)
+        </label>
+        <p id="setupStatus" class="upload-status"></p>
+        <p id="setupRoutingHint" class="meta sync-route-hint"></p>
+        <footer class="dialog-footer">
+          <button type="button" class="ghost-btn" id="createSetupLocalFolderButton">Crear carpeta</button>
+          <button type="button" class="ghost-btn" id="createSetupCloudFolderButton">Crear carpeta nube</button>
+          <button type="submit" class="primary-btn" id="saveSetupButton">Guardar</button>
+        </footer>
+      </form>
+    </dialog>
+
     <dialog id="extraMediaDialog" class="dialog extra-media-dialog">
       <form id="extraMediaForm" method="dialog" novalidate>
         <header class="dialog-header">
@@ -487,10 +694,11 @@
           <button type="button" class="ghost-btn is-active" data-extra-media-mode="url">URL</button>
           <button type="button" class="ghost-btn" data-extra-media-mode="upload">Archivo</button>
         </div>
+        <p id="extraMediaLimitHint" class="upload-hint"></p>
 
         <label id="extraMediaUrlField" class="full-width">
           URL
-          <input id="extraMediaUrlInput" type="url" placeholder="https://..." />
+          <textarea id="extraMediaUrlInput" rows="4" placeholder="https://..."></textarea>
         </label>
 
         <label id="extraMediaFileField" class="full-width hidden">
@@ -523,10 +731,7 @@
 
     <dialog id="mediaPreviewDialog" class="dialog media-preview-dialog">
       <form method="dialog" class="media-preview-body">
-        <header class="dialog-header">
-          <h2>Vista previa</h2>
-          <button type="button" id="closeMediaPreviewButton" class="ghost-btn">Cerrar</button>
-        </header>
+        <button type="button" id="closeMediaPreviewButton" class="ghost-btn media-preview-close" aria-label="Cerrar">✕</button>
         <img id="mediaPreviewImage" alt="Vista previa del adjunto" />
         <p id="mediaPreviewCaption" class="meta hidden"></p>
       </form>
@@ -538,6 +743,32 @@
         <p>Crea tu primer tutorial con el boton "Nuevo tutorial".</p>
       </div>
     </template>
+
+    <div id="markdownToolbar" class="markdown-toolbar hidden" role="toolbar" aria-label="Formato de texto">
+      <button type="button" data-md-action="bold"><strong>B</strong></button>
+      <button type="button" data-md-action="italic"><em>I</em></button>
+      <button type="button" data-md-action="underline"><u>U</u></button>
+      <button type="button" data-md-action="heading">H</button>
+      <button type="button" data-md-action="quote">"</button>
+      <button type="button" data-md-action="list">•</button>
+      <button type="button" data-md-action="code">{ }</button>
+      <button type="button" data-md-action="link">link</button>
+      <span class="toolbar-divider" aria-hidden="true"></span>
+      <button type="button" class="md-color-btn" data-md-action="text-color" data-md-color="#ef4444" title="Color de letra rojo"><span class="md-color-token md-color-token--text md-color-token--red">A</span></button>
+      <button type="button" class="md-color-btn" data-md-action="text-color" data-md-color="#22c55e" title="Color de letra verde"><span class="md-color-token md-color-token--text md-color-token--green">A</span></button>
+      <button type="button" class="md-color-btn" data-md-action="text-color" data-md-color="#3b82f6" title="Color de letra azul"><span class="md-color-token md-color-token--text md-color-token--blue">A</span></button>
+      <button type="button" class="md-color-btn" data-md-action="text-color" data-md-color="#f59e0b" title="Color de letra naranja"><span class="md-color-token md-color-token--text md-color-token--amber">A</span></button>
+      <span class="toolbar-divider" aria-hidden="true"></span>
+      <button type="button" class="md-color-btn md-color-btn--underline" data-md-action="underline-color" data-md-color="#ef4444" title="Color del subrayado rojo"><span class="md-color-token md-color-token--underline md-color-token--red">U</span></button>
+      <button type="button" class="md-color-btn md-color-btn--underline" data-md-action="underline-color" data-md-color="#22c55e" title="Color del subrayado verde"><span class="md-color-token md-color-token--underline md-color-token--green">U</span></button>
+      <button type="button" class="md-color-btn md-color-btn--underline" data-md-action="underline-color" data-md-color="#3b82f6" title="Color del subrayado azul"><span class="md-color-token md-color-token--underline md-color-token--blue">U</span></button>
+      <button type="button" class="md-color-btn md-color-btn--underline" data-md-action="underline-color" data-md-color="#f59e0b" title="Color del subrayado naranja"><span class="md-color-token md-color-token--underline md-color-token--amber">U</span></button>
+      <span class="toolbar-divider" aria-hidden="true"></span>
+      <button type="button" class="md-color-btn" data-md-action="highlight-color" data-md-color="#fde68a" title="Resaltado amarillo"><span class="md-color-token md-color-token--highlight md-color-token--yellow">H</span></button>
+      <button type="button" class="md-color-btn" data-md-action="highlight-color" data-md-color="#bbf7d0" title="Resaltado verde"><span class="md-color-token md-color-token--highlight md-color-token--mint">H</span></button>
+      <button type="button" class="md-color-btn" data-md-action="highlight-color" data-md-color="#bfdbfe" title="Resaltado azul"><span class="md-color-token md-color-token--highlight md-color-token--sky">H</span></button>
+      <button type="button" class="md-color-btn" data-md-action="highlight-color" data-md-color="#fbcfe8" title="Resaltado rosa"><span class="md-color-token md-color-token--highlight md-color-token--pink">H</span></button>
+    </div>
 
     <script src="app.js"></script>
   </body>

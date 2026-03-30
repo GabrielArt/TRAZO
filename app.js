@@ -1,9 +1,84 @@
 const API_BASE = "/api";
 const STATUS_ORDER = ["Por ver", "En progreso", "Aplicado", "Archivado"];
-const MAX_UPLOAD_SIZE_BYTES = 250 * 1024 * 1024;
+const DEFAULT_MAX_UPLOAD_SIZE_BYTES = 5 * 1024 * 1024 * 1024;
+const DEFAULT_CLOUD_MEDIA_TRANSFER_MAX_BYTES = 100 * 1024 * 1024;
 const TEXT_FILE_EXTENSIONS = [".txt", ".md", ".markdown"];
 const SMART_COLLECTION_KEYS = ["all", "due", "focus", "uncategorized", "duplicates"];
 const TABLE_COLUMN_KEYS = ["type", "category", "collection", "reviewDate", "updatedAt"];
+const EMOJI_COLOR_KEYS = ["default", "blue", "red", "green", "yellow", "purple", "orange"];
+const RICH_HTML_STORAGE_PREFIX = "@@TV_RICH_HTML@@";
+const LIVE_SYNC_POLL_MS = 1000;
+const LIVE_SYNC_SSE_RECONNECT_MS = 900;
+const LIVE_EDIT_GRACE_MS = 1200;
+const MOBILE_SIDEBAR_BREAKPOINT = 980;
+const EMOJI_PICKER_STORAGE_KEY = "tv_recent_symbols";
+const EMOJI_PICKER_MAX_RECENT = 18;
+const EMOJI_PICKER_TABS = Object.freeze([
+  { id: "recent", label: "Recientes" },
+  { id: "faces", label: "Caras" },
+  { id: "symbols", label: "Simbolos" },
+  { id: "shapes", label: "Formas" },
+  { id: "arrows", label: "Flechas" },
+  { id: "misc", label: "Varios" },
+]);
+const EMOJI_PICKER_LIBRARY = Object.freeze({
+  faces: Object.freeze([
+    { symbol: "☺", label: "sonrisa", keywords: "feliz cara sonrisa" },
+    { symbol: "☻", label: "alegre", keywords: "cara feliz alegre" },
+    { symbol: "☹", label: "triste", keywords: "cara triste" },
+    { symbol: "☼", label: "sol", keywords: "sol luz dia" },
+    { symbol: "♥", label: "corazon", keywords: "amor corazon" },
+    { symbol: "♡", label: "corazon vacio", keywords: "amor corazon" },
+    { symbol: "✿", label: "flor", keywords: "flor naturaleza" },
+    { symbol: "❀", label: "flor decorativa", keywords: "flor" },
+  ]),
+  symbols: Object.freeze([
+    { symbol: "✦", label: "estrella", keywords: "estrella brillo" },
+    { symbol: "✶", label: "estrella fuerte", keywords: "estrella brillo" },
+    { symbol: "✧", label: "brillo fino", keywords: "estrella brillo" },
+    { symbol: "✩", label: "estrella vacia", keywords: "estrella" },
+    { symbol: "✓", label: "check", keywords: "check listo correcto" },
+    { symbol: "✕", label: "equis", keywords: "x error cerrar" },
+    { symbol: "⚡", label: "rayo", keywords: "rayo energia rapido" },
+    { symbol: "∞", label: "infinito", keywords: "infinito" },
+  ]),
+  shapes: Object.freeze([
+    { symbol: "●", label: "circulo lleno", keywords: "circulo forma" },
+    { symbol: "○", label: "circulo vacio", keywords: "circulo forma" },
+    { symbol: "◆", label: "rombo", keywords: "rombo forma" },
+    { symbol: "◇", label: "rombo vacio", keywords: "rombo forma" },
+    { symbol: "■", label: "cuadrado lleno", keywords: "cuadrado forma" },
+    { symbol: "□", label: "cuadrado vacio", keywords: "cuadrado forma" },
+    { symbol: "▲", label: "triangulo arriba", keywords: "triangulo forma" },
+    { symbol: "▼", label: "triangulo abajo", keywords: "triangulo forma" },
+  ]),
+  arrows: Object.freeze([
+    { symbol: "←", label: "flecha izquierda", keywords: "flecha izquierda" },
+    { symbol: "→", label: "flecha derecha", keywords: "flecha derecha" },
+    { symbol: "↑", label: "flecha arriba", keywords: "flecha arriba" },
+    { symbol: "↓", label: "flecha abajo", keywords: "flecha abajo" },
+    { symbol: "↔", label: "flecha horizontal", keywords: "flecha horizontal" },
+    { symbol: "↕", label: "flecha vertical", keywords: "flecha vertical" },
+    { symbol: "➜", label: "flecha curva", keywords: "flecha avanzar" },
+    { symbol: "➤", label: "puntero", keywords: "flecha puntero" },
+  ]),
+  misc: Object.freeze([
+    { symbol: "⚙", label: "configuracion", keywords: "configuracion ajustes" },
+    { symbol: "⚒", label: "herramientas", keywords: "herramientas trabajo" },
+    { symbol: "☕", label: "cafe", keywords: "cafe bebida" },
+    { symbol: "☁", label: "nube", keywords: "nube cloud" },
+    { symbol: "☂", label: "paraguas", keywords: "lluvia paraguas" },
+    { symbol: "✉", label: "correo", keywords: "mail correo mensaje" },
+    { symbol: "✎", label: "lapiz", keywords: "escribir editar" },
+    { symbol: "⌛", label: "tiempo", keywords: "reloj tiempo espera" },
+  ]),
+});
+const EMOJI_PICKER_ENTRY_MAP = new Map(
+  Object.values(EMOJI_PICKER_LIBRARY)
+    .flat()
+    .map((entry) => [entry.symbol, entry])
+);
+const EMOJI_PICKER_ALL_ENTRIES = Object.freeze(Array.from(EMOJI_PICKER_ENTRY_MAP.values()));
 const DEFAULT_VISIBLE_COLUMNS = Object.freeze({
   type: true,
   category: true,
@@ -11,9 +86,27 @@ const DEFAULT_VISIBLE_COLUMNS = Object.freeze({
   reviewDate: true,
   updatedAt: false,
 });
+const DEFAULT_USER_SETTINGS = Object.freeze({
+  storageMode: "device",
+  localRootPath: "",
+  cloudRootPath: "",
+  cloudProvider: "none",
+  cloudEnabled: false,
+  cloudConnected: false,
+  cloudAccountName: "",
+  cloudConnectedAt: "",
+  peerEnabled: false,
+  syncTutorialIds: [],
+  setupCompleted: false,
+  lastSyncAt: "",
+  lastSyncStatus: "idle",
+  lastSyncSummary: {},
+  updatedAt: "",
+});
 
 const state = {
   tutorials: [],
+  tutorialsSignature: "",
   savedViews: [],
   page: "library",
   search: "",
@@ -31,9 +124,9 @@ const state = {
   showAdvancedFilters: false,
   smartCollection: "all",
   theme: getInitialTheme(),
+  sidebarCollapsed: getInitialSidebarCollapsed(),
   notesSide: getInitialNotesSide(),
   tutorialEditMode: false,
-  editorMiniMapOpen: true,
   editingId: null,
   selectedId: null,
   selectedIds: new Set(),
@@ -42,24 +135,49 @@ const state = {
   mediaCarouselIndexByTutorial: {},
   currentUser: null,
   authMode: "login",
+  userSettings: { ...DEFAULT_USER_SETTINGS },
+  maxUploadSizeBytes: DEFAULT_MAX_UPLOAD_SIZE_BYTES,
+  cloudMediaTransferMaxBytes: DEFAULT_CLOUD_MEDIA_TRANSFER_MAX_BYTES,
+  notesCollapse: getInitialNotesCollapseState(),
   reminderPermission: typeof Notification !== "undefined" ? Notification.permission : "unsupported",
   visibleColumns: { ...DEFAULT_VISIBLE_COLUMNS },
+  emojiPickerCategory: "recent",
 };
 
 let uploadProgressTimer = null;
 let reminderIntervalId = null;
+let liveSyncIntervalId = null;
+let liveSyncInFlight = false;
+let liveSyncPendingApply = false;
+let liveEventSource = null;
+let liveEventReconnectTimer = null;
+let liveEventQueuedTutorials = false;
+let liveEventQueuedSettings = false;
+let liveEventQueueTimer = null;
+let liveEventStreamConnected = false;
+let liveEditLastAt = 0;
+let liveSyncPendingFlushTimer = null;
 let notesAutosaveTimer = null;
+let primaryTextAutosaveTimer = null;
 let extraComposerAutosaveTimer = null;
 let isApplyingRoute = false;
 let activeDraggedExtraBlock = null;
+let activeMarkdownTarget = null;
+let recentEmojiSymbols = loadRecentEmojiSymbols();
+let wasCompactSidebarViewport = false;
+let sidebarAutoCollapsed = false;
 const extraBlockAutosaveTimers = new Map();
 const tutorialEditorAutosaveTimers = new Map();
 
 const refs = {
+  appShell: document.querySelector(".app-shell"),
   appContent: document.querySelector("#appContent"),
   libraryPage: document.querySelector("#libraryPage"),
   tutorialPage: document.querySelector("#tutorialPage"),
   settingsPage: document.querySelector("#settingsPage"),
+  sidebarBackdrop: document.querySelector("#sidebarBackdrop"),
+  toggleSidebarButton: document.querySelector("#toggleSidebarButton"),
+  sidebarExpandButton: document.querySelector("#sidebarExpandButton"),
   authGate: document.querySelector("#authGate"),
   showLoginButton: document.querySelector("#showLoginButton"),
   showRegisterButton: document.querySelector("#showRegisterButton"),
@@ -125,9 +243,23 @@ const refs = {
   dialog: document.querySelector("#tutorialDialog"),
   dialogTitle: document.querySelector("#dialogTitle"),
   tutorialForm: document.querySelector("#tutorialForm"),
+  emojiInput: document.querySelector("#emojiInput"),
+  emojiPickerToggle: document.querySelector("#emojiPickerToggle"),
+  emojiPickerPanel: document.querySelector("#emojiPickerPanel"),
+  emojiPickerSearch: document.querySelector("#emojiPickerSearch"),
+  emojiPickerRecentGrid: document.querySelector("#emojiPickerRecentGrid"),
+  emojiPickerGrid: document.querySelector("#emojiPickerGrid"),
+  emojiPickerCategoryTitle: document.querySelector("#emojiPickerCategoryTitle"),
+  emojiPickerEmpty: document.querySelector("#emojiPickerEmpty"),
+  emojiPickerCategoryButtons: Array.from(document.querySelectorAll("[data-emoji-category]")),
   closeDialogButton: document.querySelector("#closeDialogButton"),
   deleteButton: document.querySelector("#deleteButton"),
   saveButton: document.querySelector("#tutorialForm button[type='submit']"),
+  dialogMiniEditor: document.querySelector("#dialogMiniEditor"),
+  dialogMiniEditorContent: document.querySelector("#dialogMiniEditorContent"),
+  dialogMiniAddImage: document.querySelector("#dialogMiniAddImage"),
+  dialogMiniAddVideo: document.querySelector("#dialogMiniAddVideo"),
+  dialogMiniAddText: document.querySelector("#dialogMiniAddText"),
   emptyStateTemplate: document.querySelector("#emptyStateTemplate"),
   seedDataButton: document.querySelector("#seedDataButton"),
   exportButton: document.querySelector("#exportButton"),
@@ -143,6 +275,7 @@ const refs = {
   uploadInput: document.querySelector("#uploadInput"),
   uploadProgress: document.querySelector("#uploadProgress"),
   uploadStatus: document.querySelector("#uploadStatus"),
+  uploadLimitHint: document.querySelector("#uploadLimitHint"),
   extraMediaDialog: document.querySelector("#extraMediaDialog"),
   extraMediaForm: document.querySelector("#extraMediaForm"),
   extraMediaTitle: document.querySelector("#extraMediaTitle"),
@@ -158,20 +291,71 @@ const refs = {
   extraMediaTimestampsField: document.querySelector("#extraMediaTimestampsField"),
   extraMediaTimestampsInput: document.querySelector("#extraMediaTimestampsInput"),
   extraMediaStatus: document.querySelector("#extraMediaStatus"),
+  extraMediaLimitHint: document.querySelector("#extraMediaLimitHint"),
   mediaPreviewDialog: document.querySelector("#mediaPreviewDialog"),
   mediaPreviewImage: document.querySelector("#mediaPreviewImage"),
   mediaPreviewCaption: document.querySelector("#mediaPreviewCaption"),
   closeMediaPreviewButton: document.querySelector("#closeMediaPreviewButton"),
+  markdownToolbar: document.querySelector("#markdownToolbar"),
+  setupDialog: document.querySelector("#setupDialog"),
+  setupForm: document.querySelector("#setupForm"),
+  closeSetupButton: document.querySelector("#closeSetupButton"),
+  saveSetupButton: document.querySelector("#saveSetupButton"),
+  createSetupLocalFolderButton: document.querySelector("#createSetupLocalFolderButton"),
+  setupStorageMode: document.querySelector("#setupStorageMode"),
+  setupLocalRootPath: document.querySelector("#setupLocalRootPath"),
+  setupCloudProvider: document.querySelector("#setupCloudProvider"),
+  setupCloudSyncEnabled: document.querySelector("#setupCloudSyncEnabled"),
+  setupPeerSyncEnabled: document.querySelector("#setupPeerSyncEnabled"),
+  setupStatus: document.querySelector("#setupStatus"),
+  storageModeSelect: document.querySelector("#storageModeSelect"),
+  localRootPathInput: document.querySelector("#localRootPathInput"),
+  cloudRootPathInput: document.querySelector("#cloudRootPathInput"),
+  cloudProviderSelect: document.querySelector("#cloudProviderSelect"),
+  cloudAccountNameInput: document.querySelector("#cloudAccountNameInput"),
+  cloudSyncEnabled: document.querySelector("#cloudSyncEnabled"),
+  peerSyncEnabled: document.querySelector("#peerSyncEnabled"),
+  pickLocalFolderButton: document.querySelector("#pickLocalFolderButton"),
+  pickCloudFolderButton: document.querySelector("#pickCloudFolderButton"),
+  openCloudSignInButton: document.querySelector("#openCloudSignInButton"),
+  connectCloudButton: document.querySelector("#connectCloudButton"),
+  oauthDiagnosticButton: document.querySelector("#oauthDiagnosticButton"),
+  oauthDriveDiagnosticButton: document.querySelector("#oauthDriveDiagnosticButton"),
+  disconnectCloudButton: document.querySelector("#disconnectCloudButton"),
+  createLocalFolderButton: document.querySelector("#createLocalFolderButton"),
+  createCloudFolderButton: document.querySelector("#createCloudFolderButton"),
+  saveStorageSettingsButton: document.querySelector("#saveStorageSettingsButton"),
+  runStorageSyncButton: document.querySelector("#runStorageSyncButton"),
+  exportDevicePackageButton: document.querySelector("#exportDevicePackageButton"),
+  importDevicePackageButton: document.querySelector("#importDevicePackageButton"),
+  importDevicePackageInput: document.querySelector("#importDevicePackageInput"),
+  syncNowHint: document.querySelector("#syncNowHint"),
+  storageSetupStatus: document.querySelector("#storageSetupStatus"),
+  storageRoutingHint: document.querySelector("#storageRoutingHint"),
+  cloudConnectionStatus: document.querySelector("#cloudConnectionStatus"),
+  lastSyncMeta: document.querySelector("#lastSyncMeta"),
+  lastSyncDetails: document.querySelector("#lastSyncDetails"),
+  setupTutorialSyncList: document.querySelector("#setupTutorialSyncList"),
+  setupCloudRootPath: document.querySelector("#setupCloudRootPath"),
+  createSetupCloudFolderButton: document.querySelector("#createSetupCloudFolderButton"),
+  setupRoutingHint: document.querySelector("#setupRoutingHint"),
 };
 
 void init();
 
 async function init() {
   bindEvents();
+  wasCompactSidebarViewport = isCompactSidebarViewport();
   applyTheme(state.theme);
+  applySidebarCollapsed(state.sidebarCollapsed, { persist: false });
+  syncResponsiveShell();
   syncAdvancedFiltersVisibility();
+  syncEmojiPickerToggleIcon();
+  renderEmojiPickerPanel();
   switchAuthMode("login");
   syncTypeSpecificFields();
+  syncUploadLimitHints();
+  await refreshClientConfig();
   await bootstrapSession();
 }
 
@@ -274,14 +458,40 @@ function bindEvents() {
     render();
   });
   refs.themeToggleButton.addEventListener("click", toggleTheme);
+  refs.toggleSidebarButton?.addEventListener("click", () => applySidebarCollapsed(!state.sidebarCollapsed));
+  refs.sidebarExpandButton?.addEventListener("click", () => applySidebarCollapsed(false));
+  refs.sidebarBackdrop?.addEventListener("click", () => applySidebarCollapsed(true, { persist: false }));
 
   refs.newTutorialButton.addEventListener("click", openDialogForCreate);
   refs.shortcutsButton?.addEventListener("click", openShortcutsDialog);
   refs.closeShortcutsButton?.addEventListener("click", () => refs.shortcutsDialog.close());
   refs.closeDialogButton.addEventListener("click", () => refs.dialog.close());
+  refs.dialog.addEventListener("click", (event) => void onActionClick(event));
+  refs.dialog.addEventListener("close", () => {
+    closeEmojiPickerPanel();
+    const shouldReturnToViewer = state.page === "tutorial" && state.tutorialEditMode;
+    hideDialogMiniEditor();
+    if (shouldReturnToViewer) {
+      state.tutorialEditMode = false;
+      render();
+    }
+  });
   refs.tutorialForm.addEventListener("submit", (event) => {
     event.preventDefault();
     void upsertTutorialFromForm();
+  });
+  refs.emojiInput?.addEventListener("input", () => syncEmojiPickerToggleIcon());
+  refs.emojiPickerSearch?.addEventListener("input", () => renderEmojiPickerPanel());
+  refs.emojiPickerSearch?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+    }
+  });
+  refs.emojiPickerCategoryButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      state.emojiPickerCategory = normalizeEmojiPickerCategory(button.dataset.emojiCategory);
+      renderEmojiPickerPanel();
+    });
   });
   refs.deleteButton.addEventListener("click", () => void deleteEditingTutorial());
   refs.closeExtraMediaButton?.addEventListener("click", closeExtraMediaDialog);
@@ -298,11 +508,18 @@ function bindEvents() {
   refs.extraMediaFileInput?.addEventListener("change", () => {
     const files = Array.from(refs.extraMediaFileInput.files || []);
     if (!files.length) {
-      refs.extraMediaStatus.textContent = "";
+      setExtraMediaDialogStatus("");
     } else if (files.length === 1) {
-      refs.extraMediaStatus.textContent = `Archivo seleccionado: ${files[0].name}`;
+      setExtraMediaDialogStatus(`Archivo seleccionado: ${files[0].name}`);
     } else {
-      refs.extraMediaStatus.textContent = `${files.length} archivos seleccionados`;
+      const previewNames = files
+        .slice(0, 2)
+        .map((file) => file.name)
+        .join(", ");
+      const remaining = files.length - 2;
+      setExtraMediaDialogStatus(
+        remaining > 0 ? `${previewNames} (+${remaining} mas)` : `${files.length} archivos seleccionados`
+      );
     }
   });
   refs.closeMediaPreviewButton?.addEventListener("click", closeMediaPreviewDialog);
@@ -318,10 +535,25 @@ function bindEvents() {
   refs.tutorialPage.addEventListener("click", (event) => void onActionClick(event));
   refs.tutorialPage.addEventListener("input", (event) => onTutorialPageInput(event));
   refs.tutorialPage.addEventListener("change", (event) => onTutorialPageInput(event));
+  refs.tutorialPage.addEventListener("keydown", (event) => onTutorialPageKeydown(event));
   refs.tutorialPage.addEventListener("dragstart", (event) => onTutorialPageDragStart(event));
   refs.tutorialPage.addEventListener("dragover", (event) => onTutorialPageDragOver(event));
   refs.tutorialPage.addEventListener("drop", (event) => void onTutorialPageDrop(event));
   refs.tutorialPage.addEventListener("dragend", () => onTutorialPageDragEnd());
+  refs.tutorialPage.addEventListener("mouseup", () => scheduleMarkdownToolbarUpdate());
+  refs.tutorialPage.addEventListener("keyup", () => scheduleMarkdownToolbarUpdate());
+  refs.tutorialPage.addEventListener("focusin", () => scheduleMarkdownToolbarUpdate());
+  refs.tutorialPage.addEventListener("focusout", () => scheduleMarkdownToolbarUpdate(120));
+  refs.tutorialPage.addEventListener("focusout", (event) => onTutorialPageFocusOut(event));
+  refs.dialog.addEventListener("dragstart", (event) => onTutorialPageDragStart(event));
+  refs.dialog.addEventListener("dragover", (event) => onTutorialPageDragOver(event));
+  refs.dialog.addEventListener("drop", (event) => void onTutorialPageDrop(event));
+  refs.dialog.addEventListener("dragend", () => onTutorialPageDragEnd());
+  refs.dialog.addEventListener("mouseup", () => scheduleMarkdownToolbarUpdate());
+  refs.dialog.addEventListener("keyup", () => scheduleMarkdownToolbarUpdate());
+  refs.dialog.addEventListener("focusin", () => scheduleMarkdownToolbarUpdate());
+  refs.dialog.addEventListener("focusout", () => scheduleMarkdownToolbarUpdate(120));
+  refs.dialog.addEventListener("focusout", (event) => onTutorialPageFocusOut(event));
   refs.settingsPage.addEventListener("click", (event) => {
     if (event.target === refs.settingsPage) {
       goToPage("library");
@@ -352,6 +584,42 @@ function bindEvents() {
   refs.seedDataButton.addEventListener("click", () => void injectDemoData());
   refs.saveCurrentViewButton.addEventListener("click", () => void saveCurrentView());
   refs.enableRemindersButton.addEventListener("click", () => void handleEnableReminders());
+  refs.saveStorageSettingsButton?.addEventListener("click", () => void saveStorageSettingsFromPanel());
+  refs.pickLocalFolderButton?.addEventListener("click", () => void pickLocalFolderFromExplorer("local"));
+  refs.pickCloudFolderButton?.addEventListener("click", () => void pickLocalFolderFromExplorer("cloud"));
+  refs.openCloudSignInButton?.addEventListener("click", openSelectedCloudProviderSignIn);
+  refs.oauthDiagnosticButton?.addEventListener("click", runGoogleOauthDiagnostic);
+  refs.oauthDriveDiagnosticButton?.addEventListener("click", runGoogleDriveOauthDiagnostic);
+  refs.createLocalFolderButton?.addEventListener("click", () => void createLocalFolderFromPanel());
+  refs.createCloudFolderButton?.addEventListener("click", () => void createCloudFolderFromPanel());
+  refs.connectCloudButton?.addEventListener("click", () => void connectCloudProviderFromPanel());
+  refs.disconnectCloudButton?.addEventListener("click", () => void disconnectCloudProviderFromPanel());
+  refs.runStorageSyncButton?.addEventListener("click", () => void runStorageSyncNow());
+  refs.exportDevicePackageButton?.addEventListener("click", exportDeviceSyncPackage);
+  refs.importDevicePackageButton?.addEventListener("click", () => refs.importDevicePackageInput?.click());
+  refs.importDevicePackageInput?.addEventListener("change", (event) => void importDeviceSyncPackage(event));
+  refs.setupTutorialSyncList?.addEventListener("change", onSettingsTutorialSyncChange);
+  refs.closeSetupButton?.addEventListener("click", () => refs.setupDialog?.close());
+  refs.createSetupLocalFolderButton?.addEventListener("click", () => void createLocalFolderFromSetupDialog());
+  refs.createSetupCloudFolderButton?.addEventListener("click", () => void createCloudFolderFromSetupDialog());
+  refs.setupForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void saveSetupDialogSettings();
+  });
+  [
+    refs.storageModeSelect,
+    refs.cloudProviderSelect,
+    refs.cloudSyncEnabled,
+    refs.peerSyncEnabled,
+    refs.setupStorageMode,
+    refs.setupCloudProvider,
+    refs.setupCloudSyncEnabled,
+    refs.setupPeerSyncEnabled,
+  ]
+    .filter(Boolean)
+    .forEach((input) => {
+      input.addEventListener("change", syncStorageRoutingHintsFromInputs);
+    });
   refs.selectVisibleButton.addEventListener("click", () => {
     selectVisibleTutorials();
     render();
@@ -400,9 +668,21 @@ function bindEvents() {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") {
       void flushPendingAutosaves();
+      stopLiveEventStream();
+      stopLiveSyncLoop();
+      return;
     }
+    syncLiveSyncLoopState();
+    void runLiveSyncTick({ force: true });
   });
   window.addEventListener("resize", () => {
+    syncResponsiveShell();
+    if (state.currentUser && state.page === "library" && state.view === "table") {
+      window.requestAnimationFrame(() => {
+        render();
+      });
+      return;
+    }
     if (!state.currentUser || state.page !== "tutorial" || !state.selectedId) {
       return;
     }
@@ -416,6 +696,40 @@ function bindEvents() {
     }
   });
   document.addEventListener("keydown", onGlobalKeydown);
+  refs.markdownToolbar?.addEventListener("click", (event) => onMarkdownToolbarClick(event));
+  refs.markdownToolbar?.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+  });
+  refs.tutorialPage.addEventListener("keydown", (event) => onMarkdownEditorKeydown(event));
+  refs.dialog.addEventListener("keydown", (event) => onMarkdownEditorKeydown(event));
+  document.addEventListener("mousedown", (event) => {
+    const target = event.target;
+    if (target instanceof Element && target.closest("[data-toggle-notes-collapse]")) {
+      event.preventDefault();
+    }
+    const richMarkdownTarget = findRichMarkdownEditableFromNode(target);
+    const keepMarkdownToolbarOpen =
+      (target instanceof HTMLElement && isMarkdownEditableTarget(target)) || richMarkdownTarget instanceof HTMLElement;
+    if (
+      refs.markdownToolbar &&
+      !refs.markdownToolbar.classList.contains("hidden") &&
+      target instanceof Node &&
+      !refs.markdownToolbar.contains(target) &&
+      !keepMarkdownToolbarOpen
+    ) {
+      hideMarkdownToolbar();
+    }
+    if (
+      refs.emojiPickerPanel &&
+      refs.emojiPickerToggle &&
+      !refs.emojiPickerPanel.classList.contains("hidden") &&
+      target instanceof Node &&
+      !refs.emojiPickerPanel.contains(target) &&
+      !refs.emojiPickerToggle.contains(target)
+    ) {
+      closeEmojiPickerPanel();
+    }
+  });
 }
 
 async function bootstrapSession() {
@@ -425,7 +739,9 @@ async function bootstrapSession() {
     setAuthenticated(response.user);
     await refreshTutorials();
     await refreshSavedViews();
+    await refreshUserSettings();
     startReminderLoop();
+    syncLiveSyncLoopState();
   } catch {
     setAuthenticated(null);
     setAuthMessage("Inicia sesion para acceder a tu biblioteca.", false);
@@ -512,6 +828,7 @@ function goToPage(page) {
   if (!state.currentUser) {
     return;
   }
+  closeWindowMediaShells();
   void flushPendingAutosaves();
   const next = page === "settings" || page === "tutorial" ? page : "library";
   if (next === "tutorial" && !state.selectedId) {
@@ -524,6 +841,7 @@ function goToPage(page) {
     }
   }
   closeSearchDialog();
+  closeSidebarForCompactNavigation();
   syncRouteToLocation();
   render();
 }
@@ -532,6 +850,7 @@ function openSearchDialog() {
   if (!state.currentUser || !refs.searchDialog?.showModal) {
     return;
   }
+  closeSidebarForCompactNavigation();
   if (!refs.searchDialog.open) {
     refs.searchDialog.showModal();
   }
@@ -559,6 +878,10 @@ function syncPageVisibility() {
   refs.libraryNavButton.classList.toggle("is-active", showLibrary && !showSettings);
   refs.settingsNavButton.classList.toggle("is-active", showSettings);
   refs.searchNavButton.classList.toggle("is-active", Boolean(refs.searchDialog?.open));
+  if (!showTutorial) {
+    hideMarkdownToolbar();
+  }
+  syncSidebarBackdrop();
 }
 
 function switchAuthMode(mode) {
@@ -573,6 +896,7 @@ function switchAuthMode(mode) {
 function setAuthenticated(user) {
   state.currentUser = user;
   const ok = Boolean(user);
+  syncResponsiveShell();
   refs.authGate.classList.toggle("hidden", ok);
   refs.appContent.classList.toggle("hidden", !ok);
   refs.logoutButton.classList.toggle("hidden", !ok);
@@ -592,6 +916,7 @@ function setAuthenticated(user) {
     }
     refs.detailPanel.classList.remove("hidden");
     updateReminderButton();
+    syncStorageSettingsUi();
     syncRouteToLocation(true);
     syncPageVisibility();
     return;
@@ -599,7 +924,9 @@ function setAuthenticated(user) {
   refs.userBadge.textContent = "No autenticado";
   state.page = "library";
   state.tutorials = [];
+  state.tutorialsSignature = "";
   state.savedViews = [];
+  state.userSettings = { ...DEFAULT_USER_SETTINGS };
   state.smartCollection = "all";
   state.selectedId = null;
   state.tutorialEditMode = false;
@@ -621,16 +948,74 @@ function setAuthenticated(user) {
   refs.duplicatePanel.innerHTML = "";
   refs.duplicatePanel.classList.add("hidden");
   refs.detailPanel.innerHTML = "";
+  if (refs.setupDialog?.open) {
+    refs.setupDialog.close();
+  }
+  if (refs.setupTutorialSyncList) {
+    refs.setupTutorialSyncList.innerHTML = "";
+  }
+  syncStorageSettingsUi();
   closeExtraMediaDialog();
   clearAutosaveTimers();
   closeSearchDialog();
   syncPageVisibility();
   stopReminderLoop();
+  stopLiveEventStream();
+  stopLiveSyncLoop();
 }
 
 function setAuthMessage(message, isError) {
   refs.authMessage.textContent = message;
   refs.authMessage.classList.toggle("is-error", isError);
+}
+
+function getEffectiveMaxUploadBytes() {
+  const parsed = Number(state.maxUploadSizeBytes);
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return Math.floor(parsed);
+  }
+  return DEFAULT_MAX_UPLOAD_SIZE_BYTES;
+}
+
+function getEffectiveCloudMediaTransferMaxBytes() {
+  const parsed = Number(state.cloudMediaTransferMaxBytes);
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return Math.floor(parsed);
+  }
+  return DEFAULT_CLOUD_MEDIA_TRANSFER_MAX_BYTES;
+}
+
+function syncUploadLimitHints() {
+  const maxUploadLabel = formatBytesForUi(getEffectiveMaxUploadBytes());
+  if (refs.uploadLimitHint) {
+    refs.uploadLimitHint.textContent = `Limite local por archivo: ${maxUploadLabel}.`;
+  }
+  if (refs.extraMediaLimitHint) {
+    refs.extraMediaLimitHint.textContent = `Modo archivo: limite local por archivo ${maxUploadLabel}.`;
+  }
+}
+
+async function refreshClientConfig() {
+  try {
+    const payload = await apiClientConfig();
+    const serverMaxUpload = Number(payload?.maxUploadBytes || 0);
+    const serverCloudTransfer = Number(payload?.cloudMediaTransferMaxBytes || 0);
+    if (Number.isFinite(serverMaxUpload) && serverMaxUpload > 0) {
+      state.maxUploadSizeBytes = Math.floor(serverMaxUpload);
+    } else {
+      state.maxUploadSizeBytes = DEFAULT_MAX_UPLOAD_SIZE_BYTES;
+    }
+    if (Number.isFinite(serverCloudTransfer) && serverCloudTransfer > 0) {
+      state.cloudMediaTransferMaxBytes = Math.floor(serverCloudTransfer);
+    } else {
+      state.cloudMediaTransferMaxBytes = DEFAULT_CLOUD_MEDIA_TRANSFER_MAX_BYTES;
+    }
+  } catch {
+    state.maxUploadSizeBytes = DEFAULT_MAX_UPLOAD_SIZE_BYTES;
+    state.cloudMediaTransferMaxBytes = DEFAULT_CLOUD_MEDIA_TRANSFER_MAX_BYTES;
+  } finally {
+    syncUploadLimitHints();
+  }
 }
 
 async function handleLogin() {
@@ -648,7 +1033,9 @@ async function handleLogin() {
     refs.loginForm.reset();
     await refreshTutorials();
     await refreshSavedViews();
+    await refreshUserSettings();
     startReminderLoop();
+    syncLiveSyncLoopState();
   } catch (error) {
     setAuthMessage(resolveError(error, "No se pudo iniciar sesion."), true);
   }
@@ -669,7 +1056,9 @@ async function handleRegister() {
     refs.registerForm.reset();
     await refreshTutorials();
     await refreshSavedViews();
+    await refreshUserSettings();
     startReminderLoop();
+    syncLiveSyncLoopState();
   } catch (error) {
     setAuthMessage(resolveError(error, "No se pudo crear la cuenta."), true);
   }
@@ -684,6 +1073,22 @@ async function handleLogout() {
 }
 
 async function onActionClick(event) {
+  const openEmojiPickerTarget = event.target.closest("[data-open-emoji-picker]");
+  if (openEmojiPickerTarget) {
+    toggleEmojiPickerPanel();
+    return;
+  }
+  const closeEmojiPickerTarget = event.target.closest("[data-close-emoji-picker]");
+  if (closeEmojiPickerTarget) {
+    closeEmojiPickerPanel();
+    return;
+  }
+  const emojiPickTarget = event.target.closest("[data-emoji-pick]");
+  if (emojiPickTarget) {
+    const symbol = normalizeEmoji(emojiPickTarget.dataset.emojiPick || "");
+    applyPickedEmojiSymbol(symbol);
+    return;
+  }
   const pageTarget = event.target.closest("[data-go-page]");
   if (pageTarget) {
     goToPage(pageTarget.dataset.goPage);
@@ -706,22 +1111,78 @@ async function onActionClick(event) {
   }
   const openPropertiesEditTarget = event.target.closest("[data-open-properties-edit-id]");
   if (openPropertiesEditTarget) {
+    if (state.page === "tutorial" && state.tutorialEditMode) {
+      state.tutorialEditMode = false;
+      render();
+    }
     openDialogForEdit(openPropertiesEditTarget.dataset.openPropertiesEditId);
     return;
   }
   const closeEditorTarget = event.target.closest("[data-close-tutorial-editor]");
   if (closeEditorTarget) {
     await flushPendingAutosaves();
+    if (refs.dialog?.open) {
+      refs.dialog.close();
+    }
     state.tutorialEditMode = false;
     render();
     return;
   }
   const miniNotesToggleTarget = event.target.closest("[data-mini-toggle-notes]");
   if (miniNotesToggleTarget) {
-    if (!state.tutorialEditMode) {
+    if (!isStructureLayoutInteractionEnabled()) {
       return;
     }
-    toggleNotesSide();
+    await toggleNotesSide(
+      miniNotesToggleTarget.dataset.miniNotesTutorialId || state.selectedId,
+      miniNotesToggleTarget.dataset.miniNotesBlockId || ""
+    );
+    return;
+  }
+  const miniSetNotesSideTarget = event.target.closest("[data-mini-set-note-side]");
+  if (miniSetNotesSideTarget) {
+    if (!isStructureLayoutInteractionEnabled()) {
+      return;
+    }
+    const tutorialId = miniSetNotesSideTarget.dataset.miniNotesTutorialId || state.selectedId;
+    const blockId = miniSetNotesSideTarget.dataset.miniNotesBlockId || "";
+    const requestedSide = normalizeNoteSide(miniSetNotesSideTarget.dataset.miniNoteSide, "right");
+    if (!tutorialId) {
+      return;
+    }
+    const tutorial = state.tutorials.find((item) => item.id === tutorialId);
+    if (!tutorial) {
+      return;
+    }
+    const currentSide = blockId
+      ? resolveBlockNotesSide(
+          normalizeExtraContentBlocks(tutorial.extraContent, resolveTutorialNotesSide(tutorial)).find((block) => block.id === blockId),
+          resolveTutorialNotesSide(tutorial)
+        )
+      : resolveTutorialNotesSide(tutorial);
+    if (currentSide !== requestedSide) {
+      await toggleNotesSide(tutorialId, blockId);
+    }
+    return;
+  }
+  const miniMoveTarget = event.target.closest("[data-mini-move-block-id]");
+  if (miniMoveTarget) {
+    if (!isStructureLayoutInteractionEnabled()) {
+      return;
+    }
+    await moveExtraContentBlock(
+      miniMoveTarget.dataset.miniMoveTutorialId,
+      miniMoveTarget.dataset.miniMoveBlockId,
+      Number(miniMoveTarget.dataset.miniMoveDirection || 0)
+    );
+    return;
+  }
+  const collapseNotesTarget = event.target.closest("[data-toggle-notes-collapse]");
+  if (collapseNotesTarget) {
+    toggleNotesCollapse(
+      collapseNotesTarget.dataset.toggleNotesTutorialId || state.selectedId,
+      collapseNotesTarget.dataset.toggleNotesBlockId || ""
+    );
     return;
   }
   const addEditorTextTarget = event.target.closest("[data-editor-add-text-id]");
@@ -739,9 +1200,9 @@ async function onActionClick(event) {
     await toggleFavorite(favoriteTarget.dataset.toggleFavorite);
     return;
   }
-  const toggleNotesSideTarget = event.target.closest("[data-toggle-notes-side]");
-  if (toggleNotesSideTarget) {
-    toggleNotesSide();
+  const toggleWindowMediaTarget = event.target.closest("[data-toggle-window-media]");
+  if (toggleWindowMediaTarget) {
+    toggleWindowMediaShell(toggleWindowMediaTarget.closest("[data-window-media-shell]"));
     return;
   }
   const mediaPreviewTarget = event.target.closest("[data-open-media-preview]");
@@ -776,6 +1237,11 @@ async function onActionClick(event) {
     jumpExtraVideoToTimestamp(videoJumpTarget.dataset.videoJumpId, videoJumpTarget.dataset.videoJumpSeconds);
     return;
   }
+  const mainVideoJumpTarget = event.target.closest("[data-main-video-jump-seconds]");
+  if (mainVideoJumpTarget) {
+    jumpPrimaryVideoToTimestamp(mainVideoJumpTarget.dataset.mainVideoJumpSeconds);
+    return;
+  }
   const saveExtraTarget = event.target.closest("[data-save-extra-content]");
   if (saveExtraTarget) {
     await saveExtraContentComposer(saveExtraTarget.dataset.saveExtraContent);
@@ -802,7 +1268,13 @@ async function onActionClick(event) {
     if (details) {
       details.open = false;
     }
-    openExtraContentComposer(addExtraTarget.dataset.addContentId, addExtraTarget.dataset.addContentType);
+    const tutorialId = addExtraTarget.dataset.addContentId;
+    const contentType = addExtraTarget.dataset.addContentType;
+    if (contentType === "text") {
+      await addEditorTextBlock(tutorialId);
+      return;
+    }
+    openExtraContentComposer(tutorialId, contentType);
     return;
   }
   const moveExtraTarget = event.target.closest("[data-move-extra-id]");
@@ -844,6 +1316,62 @@ async function onActionClick(event) {
 }
 
 function onTutorialPageInput(event) {
+  markLiveEditActivity();
+  const richEditor = event.target?.closest?.("[data-rich-editable='1']");
+  if (richEditor instanceof HTMLElement) {
+    const serializedValue = serializeRichEditableContent(richEditor.innerHTML);
+
+    const tutorialIdFromPrimaryText = richEditor.dataset.richPrimaryTextId;
+    if (tutorialIdFromPrimaryText) {
+      const hiddenPrimaryTextEditor = refs.detailPanel.querySelector(`[data-primary-text-editor-id="${tutorialIdFromPrimaryText}"]`);
+      if (hiddenPrimaryTextEditor instanceof HTMLTextAreaElement) {
+        hiddenPrimaryTextEditor.value = serializedValue;
+      }
+      schedulePrimaryTextAutosave(tutorialIdFromPrimaryText, serializedValue);
+      return;
+    }
+
+    const tutorialIdFromNotes = richEditor.dataset.richNotesId;
+    if (tutorialIdFromNotes) {
+      const hiddenNotesEditor = refs.detailPanel.querySelector(`[data-notes-editor-id="${tutorialIdFromNotes}"]`);
+      if (hiddenNotesEditor instanceof HTMLTextAreaElement) {
+        hiddenNotesEditor.value = serializedValue;
+      }
+      scheduleNotesAutosave(tutorialIdFromNotes, serializedValue);
+      if (state.selectedId) {
+        syncDetailEditorsLayout(state.selectedId);
+      }
+      return;
+    }
+
+    const tutorialIdFromExtraNote = richEditor.dataset.richExtraNoteTutorialId;
+    const blockIdFromExtraNote = richEditor.dataset.richExtraNoteId;
+    if (tutorialIdFromExtraNote && blockIdFromExtraNote) {
+      const hiddenExtraNoteEditor = refs.detailPanel.querySelector(
+        `[data-extra-block-field="note"][data-extra-block-note-id="${blockIdFromExtraNote}"][data-extra-block-tutorial-id="${tutorialIdFromExtraNote}"]`
+      );
+      if (hiddenExtraNoteEditor instanceof HTMLTextAreaElement) {
+        hiddenExtraNoteEditor.value = serializedValue;
+      }
+      scheduleExtraBlockFieldAutosave(tutorialIdFromExtraNote, blockIdFromExtraNote, "note", serializedValue);
+      syncExtraModuleNotesHeights();
+      return;
+    }
+
+    const tutorialIdFromExtraText = richEditor.dataset.richExtraTextTutorialId;
+    const blockIdFromExtraText = richEditor.dataset.richExtraTextId;
+    if (tutorialIdFromExtraText && blockIdFromExtraText) {
+      const hiddenExtraTextEditor = refs.detailPanel.querySelector(
+        `[data-extra-block-field="text"][data-extra-block-id="${blockIdFromExtraText}"][data-extra-block-tutorial-id="${tutorialIdFromExtraText}"]`
+      );
+      if (hiddenExtraTextEditor instanceof HTMLTextAreaElement) {
+        hiddenExtraTextEditor.value = serializedValue;
+      }
+      scheduleExtraBlockFieldAutosave(tutorialIdFromExtraText, blockIdFromExtraText, "text", serializedValue);
+      return;
+    }
+  }
+
   if (state.tutorialEditMode) {
     const primaryField = event.target?.closest?.("[data-editor-primary-field]");
     if (primaryField) {
@@ -882,6 +1410,7 @@ function onTutorialPageInput(event) {
     } else {
       syncPrimaryNotesHeight(notesField);
     }
+    updatePrimaryNotesMarkdownPreview(notesField.dataset.notesEditorId, notesField.value);
     scheduleNotesAutosave(notesField.dataset.notesEditorId, notesField.value);
     if (state.selectedId) {
       syncDetailEditorsLayout(state.selectedId);
@@ -889,14 +1418,28 @@ function onTutorialPageInput(event) {
     return;
   }
 
-  const mediaNoteField = event.target?.closest?.("[data-extra-block-note-id]");
-  if (mediaNoteField instanceof HTMLTextAreaElement) {
-    const tutorialId = mediaNoteField.dataset.extraBlockTutorialId;
-    const blockId = mediaNoteField.dataset.extraBlockNoteId;
-    if (tutorialId && blockId) {
-      scheduleExtraBlockFieldAutosave(tutorialId, blockId, "note", mediaNoteField.value);
+  const extraBlockField = event.target?.closest?.("[data-extra-block-field]");
+  if (
+    extraBlockField instanceof HTMLInputElement ||
+    extraBlockField instanceof HTMLTextAreaElement ||
+    extraBlockField instanceof HTMLSelectElement
+  ) {
+    const tutorialId = extraBlockField.dataset.extraBlockTutorialId;
+    const blockId = extraBlockField.dataset.extraBlockId || extraBlockField.dataset.extraBlockNoteId;
+    const field = extraBlockField.dataset.extraBlockField;
+    if (tutorialId && blockId && field) {
+      scheduleExtraBlockFieldAutosave(tutorialId, blockId, field, extraBlockField.value);
     }
-    syncExtraModuleNotesHeights();
+    if (extraBlockField instanceof HTMLTextAreaElement) {
+      if (field === "text") {
+        autoGrowTextarea(extraBlockField, 120);
+        updateExtraMarkdownPreview(blockId, extraBlockField.value);
+      }
+      if (field === "note") {
+        updateExtraNoteMarkdownPreview(blockId, extraBlockField.value);
+      }
+      syncExtraModuleNotesHeights();
+    }
     return;
   }
 
@@ -920,8 +1463,780 @@ function onTutorialPageInput(event) {
   }
 }
 
+function onTutorialPageKeydown(event) {
+  const target = event?.target;
+  if (isLiveEditableElement(target)) {
+    markLiveEditActivity();
+  }
+}
+
+function onTutorialPageFocusOut(event) {
+  schedulePendingLiveSyncFlush(180);
+  const target = event.target;
+  const next = event.relatedTarget;
+  const movingToNotesToggle =
+    next instanceof Element && Boolean(next.closest("[data-toggle-notes-collapse]"));
+
+  if (target instanceof HTMLElement && target.dataset.richEditable === "1") {
+    if (movingToNotesToggle) {
+      return;
+    }
+    const tutorialIdFromPrimaryText = target.dataset.richPrimaryTextId;
+    if (tutorialIdFromPrimaryText) {
+      const serializedValue = serializeRichEditableContent(target.innerHTML);
+      const hiddenPrimaryTextEditor = refs.detailPanel.querySelector(`[data-primary-text-editor-id="${tutorialIdFromPrimaryText}"]`);
+      if (hiddenPrimaryTextEditor instanceof HTMLTextAreaElement) {
+        hiddenPrimaryTextEditor.value = serializedValue;
+      }
+      if (primaryTextAutosaveTimer) {
+        window.clearTimeout(primaryTextAutosaveTimer);
+        primaryTextAutosaveTimer = null;
+      }
+      void savePrimaryTextAutosave(tutorialIdFromPrimaryText, serializedValue);
+    }
+
+    const tutorialIdFromNotes = target.dataset.richNotesId;
+    if (tutorialIdFromNotes) {
+      const serializedValue = serializeRichEditableContent(target.innerHTML);
+      const hiddenNotesEditor = refs.detailPanel.querySelector(`[data-notes-editor-id="${tutorialIdFromNotes}"]`);
+      if (hiddenNotesEditor instanceof HTMLTextAreaElement) {
+        hiddenNotesEditor.value = serializedValue;
+      }
+      if (notesAutosaveTimer) {
+        window.clearTimeout(notesAutosaveTimer);
+        notesAutosaveTimer = null;
+      }
+      void saveDetailNotesAutosave(tutorialIdFromNotes, serializedValue);
+    }
+
+    const tutorialIdFromExtraNote = target.dataset.richExtraNoteTutorialId;
+    const blockIdFromExtraNote = target.dataset.richExtraNoteId;
+    if (tutorialIdFromExtraNote && blockIdFromExtraNote) {
+      const serializedValue = serializeRichEditableContent(target.innerHTML);
+      const hiddenExtraNoteEditor = refs.detailPanel.querySelector(
+        `[data-extra-block-field="note"][data-extra-block-note-id="${blockIdFromExtraNote}"][data-extra-block-tutorial-id="${tutorialIdFromExtraNote}"]`
+      );
+      if (hiddenExtraNoteEditor instanceof HTMLTextAreaElement) {
+        hiddenExtraNoteEditor.value = serializedValue;
+      }
+      clearExtraBlockAutosaveTimer(tutorialIdFromExtraNote, blockIdFromExtraNote, "note");
+      void saveExtraBlockField(tutorialIdFromExtraNote, blockIdFromExtraNote, "note", serializedValue);
+    }
+
+    const tutorialIdFromExtraText = target.dataset.richExtraTextTutorialId;
+    const blockIdFromExtraText = target.dataset.richExtraTextId;
+    if (tutorialIdFromExtraText && blockIdFromExtraText) {
+      const serializedValue = serializeRichEditableContent(target.innerHTML);
+      const hiddenExtraTextEditor = refs.detailPanel.querySelector(
+        `[data-extra-block-field="text"][data-extra-block-id="${blockIdFromExtraText}"][data-extra-block-tutorial-id="${tutorialIdFromExtraText}"]`
+      );
+      if (hiddenExtraTextEditor instanceof HTMLTextAreaElement) {
+        hiddenExtraTextEditor.value = serializedValue;
+      }
+      clearExtraBlockAutosaveTimer(tutorialIdFromExtraText, blockIdFromExtraText, "text");
+      void saveExtraBlockField(tutorialIdFromExtraText, blockIdFromExtraText, "text", serializedValue);
+    }
+
+    if (state.selectedId) {
+      syncDetailEditorsLayout(state.selectedId);
+    }
+    return;
+  }
+
+  if (target instanceof HTMLTextAreaElement && target.dataset.notesEditorId) {
+    const tutorialId = target.dataset.notesEditorId;
+    const wrap = refs.detailPanel.querySelector(`[data-primary-notes-wrap-id="${tutorialId}"]`);
+    if (wrap instanceof HTMLElement && next instanceof Node && wrap.contains(next)) {
+      return;
+    }
+    closePrimaryNotesEditor(tutorialId);
+    return;
+  }
+
+  if (
+    target instanceof HTMLTextAreaElement &&
+    target.dataset.extraBlockField === "note" &&
+    target.dataset.extraBlockNoteId &&
+    target.dataset.extraBlockTutorialId
+  ) {
+    const tutorialId = target.dataset.extraBlockTutorialId;
+    const blockId = target.dataset.extraBlockNoteId;
+    const wrap = refs.detailPanel.querySelector(`[data-extra-note-wrap-id="${blockId}"]`);
+    if (wrap instanceof HTMLElement && next instanceof Node && wrap.contains(next)) {
+      return;
+    }
+    closeExtraNoteEditor(tutorialId, blockId);
+    return;
+  }
+
+  if (
+    target instanceof HTMLTextAreaElement &&
+    target.dataset.extraBlockField === "text" &&
+    target.dataset.extraBlockId &&
+    target.dataset.extraBlockTutorialId
+  ) {
+    const tutorialId = target.dataset.extraBlockTutorialId;
+    const blockId = target.dataset.extraBlockId;
+    const wrap = refs.detailPanel.querySelector(`[data-extra-text-wrap-id="${blockId}"]`);
+    if (wrap instanceof HTMLElement && next instanceof Node && wrap.contains(next)) {
+      return;
+    }
+    closeExtraTextEditor(tutorialId, blockId);
+  }
+}
+
+function isMarkdownEditableTarget(target) {
+  return target instanceof HTMLTextAreaElement && target.dataset.markdownEnabled === "1";
+}
+
+function isRichMarkdownEditableTarget(target) {
+  return target instanceof HTMLElement && target.dataset.richEditable === "1";
+}
+
+function findRichMarkdownEditableFromNode(target) {
+  if (!(target instanceof Node)) {
+    return null;
+  }
+  if (target instanceof HTMLElement && isRichMarkdownEditableTarget(target)) {
+    return target;
+  }
+  const element = target instanceof Element ? target : target.parentElement;
+  const match = element?.closest?.("[data-rich-editable='1']");
+  return match instanceof HTMLElement ? match : null;
+}
+
+function getActiveMarkdownEditableTarget() {
+  const active = document.activeElement;
+  if (isMarkdownEditableTarget(active) || isRichMarkdownEditableTarget(active)) {
+    return active;
+  }
+  const selection = window.getSelection();
+  if (selection && selection.rangeCount > 0) {
+    const richTarget = findRichMarkdownEditableFromNode(selection.anchorNode);
+    if (richTarget) {
+      return richTarget;
+    }
+  }
+  return null;
+}
+
+function getActiveSelectionRangeForRichTarget(target) {
+  if (!isRichMarkdownEditableTarget(target)) {
+    return null;
+  }
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) {
+    return null;
+  }
+  const range = selection.getRangeAt(0);
+  if (!target.contains(range.commonAncestorContainer)) {
+    return null;
+  }
+  return range;
+}
+
+function scheduleMarkdownToolbarUpdate(delayMs = 0) {
+  if (!refs.markdownToolbar) {
+    return;
+  }
+  window.setTimeout(() => {
+    updateMarkdownToolbarVisibility();
+  }, Math.max(0, Number(delayMs) || 0));
+}
+
+function updateMarkdownToolbarVisibility() {
+  if (!refs.markdownToolbar) {
+    return;
+  }
+  const active = getActiveMarkdownEditableTarget();
+  if (!active) {
+    hideMarkdownToolbar();
+    return;
+  }
+
+  let rect = null;
+  if (isMarkdownEditableTarget(active)) {
+    const start = Number(active.selectionStart || 0);
+    const end = Number(active.selectionEnd || 0);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+      hideMarkdownToolbar();
+      return;
+    }
+    rect = active.getBoundingClientRect();
+  } else if (isRichMarkdownEditableTarget(active)) {
+    const range = getActiveSelectionRangeForRichTarget(active);
+    if (!range || range.collapsed) {
+      hideMarkdownToolbar();
+      return;
+    }
+    rect = range.getBoundingClientRect();
+    if (!rect || (!rect.width && !rect.height)) {
+      rect = active.getBoundingClientRect();
+    }
+  } else {
+    hideMarkdownToolbar();
+    return;
+  }
+
+  activeMarkdownTarget = active;
+  refs.markdownToolbar.classList.remove("hidden");
+  const width = refs.markdownToolbar.offsetWidth || 220;
+  const top = Math.max(8, rect.top - 46);
+  const anchor = rect.left + rect.width / 2;
+  const left = Math.max(8, Math.min(window.innerWidth - width - 8, anchor - width / 2));
+  refs.markdownToolbar.style.top = `${top}px`;
+  refs.markdownToolbar.style.left = `${left}px`;
+}
+
+function hideMarkdownToolbar() {
+  activeMarkdownTarget = null;
+  if (!refs.markdownToolbar) {
+    return;
+  }
+  refs.markdownToolbar.classList.add("hidden");
+}
+
+function onMarkdownToolbarClick(event) {
+  const button = event.target?.closest?.("[data-md-action]");
+  if (!button || !activeMarkdownTarget) {
+    return;
+  }
+  if (!isMarkdownEditableTarget(activeMarkdownTarget) && !isRichMarkdownEditableTarget(activeMarkdownTarget)) {
+    return;
+  }
+  const action = button.dataset.mdAction;
+  const color = button.dataset.mdColor || "";
+  applyMarkdownAction(activeMarkdownTarget, action, color);
+  scheduleMarkdownToolbarUpdate();
+}
+
+function onMarkdownEditorKeydown(event) {
+  const target = event.target;
+  const richTarget = findRichMarkdownEditableFromNode(target);
+  const markdownTarget = isMarkdownEditableTarget(target) ? target : richTarget;
+  if (!markdownTarget) {
+    return;
+  }
+  if (!(event.ctrlKey || event.metaKey)) {
+    return;
+  }
+  const key = String(event.key || "").toLowerCase();
+  let action = "";
+  if (key === "b") {
+    action = "bold";
+  } else if (key === "i") {
+    action = "italic";
+  } else if (key === "u") {
+    action = "underline";
+  } else if (key === "k") {
+    action = "link";
+  }
+  if (!action) {
+    return;
+  }
+  event.preventDefault();
+  applyMarkdownAction(markdownTarget, action, "");
+  scheduleMarkdownToolbarUpdate();
+}
+
+function applyMarkdownAction(target, action, color = "") {
+  if (isMarkdownEditableTarget(target)) {
+    applyMarkdownActionToTextarea(target, action, color);
+    return;
+  }
+  if (isRichMarkdownEditableTarget(target)) {
+    applyMarkdownActionToRichTarget(target, action, color);
+  }
+}
+
+function applyMarkdownActionToTextarea(textarea, action, color = "") {
+  if (!(textarea instanceof HTMLTextAreaElement)) {
+    return;
+  }
+  const raw = textarea.value || "";
+  const start = Number(textarea.selectionStart || 0);
+  const end = Number(textarea.selectionEnd || 0);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return;
+  }
+  const before = raw.slice(0, start);
+  const selection = raw.slice(start, end);
+  const after = raw.slice(end);
+  let replacement = selection;
+  let caretStart = start;
+  let caretEnd = end;
+
+  const wrap = (prefix, suffix = prefix, placeholder = "texto") => {
+    const content = selection || placeholder;
+    replacement = `${prefix}${content}${suffix}`;
+    caretStart = start + prefix.length;
+    caretEnd = start + prefix.length + content.length;
+  };
+
+  const prefixLines = (prefix) => {
+    const lines = (selection || "texto").split(/\r?\n/);
+    replacement = lines.map((line) => `${prefix}${line}`).join("\n");
+    caretStart = start;
+    caretEnd = start + replacement.length;
+  };
+
+  switch (action) {
+    case "bold":
+      wrap("**");
+      break;
+    case "italic":
+      wrap("*");
+      break;
+    case "heading":
+      replacement = `## ${selection || "Titulo"}`;
+      caretStart = start + 3;
+      caretEnd = start + replacement.length;
+      break;
+    case "quote":
+      prefixLines("> ");
+      break;
+    case "list":
+      prefixLines("- ");
+      break;
+    case "code":
+      wrap("`", "`", "codigo");
+      break;
+    case "underline": {
+      const content = selection || "texto";
+      replacement = `{{u:currentColor|${content}}}`;
+      caretStart = start + "{{u:currentColor|".length;
+      caretEnd = caretStart + content.length;
+      break;
+    }
+    case "text-color": {
+      const safeColor = sanitizeCssColor(color, "#60a5fa");
+      const content = selection || "texto";
+      replacement = `{{c:${safeColor}|${content}}}`;
+      caretStart = start + `{{c:${safeColor}|`.length;
+      caretEnd = caretStart + content.length;
+      break;
+    }
+    case "underline-color": {
+      const safeColor = sanitizeCssColor(color, "#f59e0b");
+      const content = selection || "texto";
+      replacement = `{{u:${safeColor}|${content}}}`;
+      caretStart = start + `{{u:${safeColor}|`.length;
+      caretEnd = caretStart + content.length;
+      break;
+    }
+    case "highlight-color": {
+      const safeColor = sanitizeCssColor(color, "#fde68a");
+      const content = selection || "texto";
+      replacement = `{{bg:${safeColor}|${content}}}`;
+      caretStart = start + `{{bg:${safeColor}|`.length;
+      caretEnd = caretStart + content.length;
+      break;
+    }
+    case "link": {
+      const content = selection || "texto";
+      replacement = `[${content}](https://)`;
+      caretStart = start + 1;
+      caretEnd = start + 1 + content.length;
+      break;
+    }
+    default:
+      return;
+  }
+
+  textarea.value = `${before}${replacement}${after}`;
+  textarea.focus();
+  textarea.setSelectionRange(caretStart, caretEnd);
+  textarea.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+function ensureRichSelection(target, placeholder = "texto") {
+  const selection = window.getSelection();
+  if (!selection) {
+    return null;
+  }
+  if (selection.rangeCount === 0) {
+    target.focus();
+  }
+  const range = getActiveSelectionRangeForRichTarget(target);
+  if (!range) {
+    return null;
+  }
+  if (!range.collapsed) {
+    return range;
+  }
+  const textNode = document.createTextNode(placeholder);
+  range.insertNode(textNode);
+  range.setStart(textNode, 0);
+  range.setEnd(textNode, textNode.length);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  return range;
+}
+
+function wrapRichSelectionWithTag(target, tagName, placeholder = "texto") {
+  const range = ensureRichSelection(target, placeholder);
+  if (!range) {
+    return false;
+  }
+  const wrapper = document.createElement(tagName);
+  try {
+    const fragment = range.extractContents();
+    if (fragment.childNodes.length === 0) {
+      wrapper.textContent = placeholder;
+    } else {
+      wrapper.appendChild(fragment);
+    }
+    range.insertNode(wrapper);
+    range.selectNodeContents(wrapper);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function wrapRichSelectionWithElement(target, buildElement, placeholder = "texto") {
+  const range = ensureRichSelection(target, placeholder);
+  if (!range) {
+    return false;
+  }
+  const wrapper = buildElement();
+  if (!(wrapper instanceof HTMLElement)) {
+    return false;
+  }
+  try {
+    const fragment = range.extractContents();
+    if (fragment.childNodes.length === 0) {
+      wrapper.textContent = placeholder;
+    } else {
+      wrapper.appendChild(fragment);
+    }
+    range.insertNode(wrapper);
+    range.selectNodeContents(wrapper);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function applyMarkdownActionToRichTarget(target, action, color = "") {
+  if (!isRichMarkdownEditableTarget(target)) {
+    return;
+  }
+  target.focus();
+
+  const exec = (command, value = undefined) => {
+    if (typeof document.execCommand !== "function") {
+      return false;
+    }
+    try {
+      return document.execCommand(command, false, value);
+    } catch {
+      return false;
+    }
+  };
+
+  switch (action) {
+    case "bold":
+      if (!exec("bold")) {
+        wrapRichSelectionWithTag(target, "strong");
+      }
+      break;
+    case "italic":
+      if (!exec("italic")) {
+        wrapRichSelectionWithTag(target, "em");
+      }
+      break;
+    case "heading":
+      exec("formatBlock", "<h4>");
+      break;
+    case "quote":
+      exec("formatBlock", "<blockquote>");
+      break;
+    case "list":
+      exec("insertUnorderedList");
+      break;
+    case "code":
+      if (!wrapRichSelectionWithTag(target, "code", "codigo")) {
+        exec("insertText", "`codigo`");
+      }
+      break;
+    case "underline":
+      if (!exec("underline")) {
+        wrapRichSelectionWithTag(target, "u");
+      }
+      break;
+    case "text-color": {
+      const safeColor = sanitizeCssColor(color, "#60a5fa");
+      const safeColorKey = normalizeColorTokenKey(safeColor);
+      const existing = findStyledAncestorForSelection(target, (element) => {
+        const token = getInlineTextColorToken(element);
+        return token && normalizeColorTokenKey(token) === safeColorKey;
+      });
+      if (existing) {
+        existing.removeAttribute("data-md-color");
+        existing.removeAttribute("color");
+        existing.style.removeProperty("color");
+        if (existing.tagName.toLowerCase() === "span" && !String(existing.getAttribute("style") || "").trim()) {
+          unwrapElementKeepChildren(existing);
+        }
+        target.dispatchEvent(new Event("input", { bubbles: true }));
+        return;
+      }
+      wrapRichSelectionWithElement(
+        target,
+        () => {
+          const span = document.createElement("span");
+          span.setAttribute("data-md-color", safeColor);
+          span.style.color = safeColor;
+          return span;
+        },
+        "texto"
+      );
+      break;
+    }
+    case "underline-color": {
+      const safeColor = sanitizeCssColor(color, "#f59e0b");
+      const safeColorKey = normalizeColorTokenKey(safeColor);
+      const existing = findStyledAncestorForSelection(target, (element) => {
+        if (!elementHasUnderlineDecoration(element)) {
+          return false;
+        }
+        const token = getInlineUnderlineColorToken(element);
+        return token && normalizeColorTokenKey(token) === safeColorKey;
+      });
+      if (existing) {
+        if (existing.tagName.toLowerCase() === "u") {
+          unwrapElementKeepChildren(existing);
+        } else {
+          existing.removeAttribute("data-md-underline");
+          existing.style.removeProperty("text-decoration");
+          existing.style.removeProperty("text-decoration-line");
+          existing.style.removeProperty("text-decoration-color");
+          if (existing.tagName.toLowerCase() === "span" && !String(existing.getAttribute("style") || "").trim()) {
+            unwrapElementKeepChildren(existing);
+          }
+        }
+        target.dispatchEvent(new Event("input", { bubbles: true }));
+        return;
+      }
+      if (!wrapRichSelectionWithElement(
+        target,
+        () => {
+          const span = document.createElement("span");
+          span.setAttribute("data-md-underline", safeColor);
+          span.style.textDecorationLine = "underline";
+          span.style.textDecorationColor = safeColor;
+          return span;
+        },
+        "texto"
+      )) {
+        exec("underline");
+      }
+      break;
+    }
+    case "highlight-color": {
+      const safeColor = sanitizeCssColor(color, "#fde68a");
+      const safeColorKey = normalizeColorTokenKey(safeColor);
+      const existing = findStyledAncestorForSelection(target, (element) => {
+        const token = getInlineHighlightColorToken(element);
+        return token && normalizeColorTokenKey(token) === safeColorKey;
+      });
+      if (existing) {
+        if (existing.tagName.toLowerCase() === "mark") {
+          unwrapElementKeepChildren(existing);
+        } else {
+          existing.removeAttribute("data-md-highlight");
+          existing.style.removeProperty("background");
+          existing.style.removeProperty("background-color");
+          if (existing.tagName.toLowerCase() === "span" && !String(existing.getAttribute("style") || "").trim()) {
+            unwrapElementKeepChildren(existing);
+          }
+        }
+        target.dispatchEvent(new Event("input", { bubbles: true }));
+        return;
+      }
+      wrapRichSelectionWithElement(
+        target,
+        () => {
+          const mark = document.createElement("mark");
+          mark.setAttribute("data-md-highlight", safeColor);
+          mark.style.backgroundColor = safeColor;
+          return mark;
+        },
+        "texto"
+      );
+      break;
+    }
+    case "link": {
+      ensureRichSelection(target, "enlace");
+      const url = window.prompt("URL del enlace:", "https://");
+      if (!url) {
+        return;
+      }
+      const safeUrl = String(url).trim();
+      if (!safeUrl) {
+        return;
+      }
+      exec("createLink", safeUrl);
+      break;
+    }
+    default:
+      return;
+  }
+
+  target.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+function updateExtraMarkdownPreview(blockId, rawText) {
+  if (!blockId) {
+    return;
+  }
+  const preview = refs.detailPanel.querySelector(`[data-extra-markdown-preview-id="${blockId}"]`);
+  if (!(preview instanceof HTMLElement)) {
+    return;
+  }
+  setMarkdownPreviewContent(preview, rawText || "", "Sin contenido");
+}
+
+function updatePrimaryNotesMarkdownPreview(tutorialId, rawText) {
+  if (!tutorialId) {
+    return;
+  }
+  const preview = refs.detailPanel.querySelector(`[data-notes-markdown-preview-id="${tutorialId}"]`);
+  setMarkdownPreviewContent(preview, rawText || "");
+}
+
+function updateExtraNoteMarkdownPreview(blockId, rawText) {
+  if (!blockId) {
+    return;
+  }
+  const preview = refs.detailPanel.querySelector(`[data-extra-note-markdown-preview-id="${blockId}"]`);
+  setMarkdownPreviewContent(preview, rawText || "");
+}
+
+function openPrimaryNotesEditor(tutorialId) {
+  if (!tutorialId) {
+    return;
+  }
+  const preview = refs.detailPanel.querySelector(`[data-notes-markdown-preview-id="${tutorialId}"]`);
+  const editor = refs.detailPanel.querySelector(`[data-notes-editor-id="${tutorialId}"]`);
+  if (!(editor instanceof HTMLTextAreaElement)) {
+    return;
+  }
+  preview?.classList.remove("hidden");
+  editor.classList.remove("hidden");
+  const len = editor.value.length;
+  editor.focus();
+  editor.setSelectionRange(len, len);
+  syncDetailEditorsLayout(tutorialId);
+}
+
+function closePrimaryNotesEditor(tutorialId) {
+  if (!tutorialId) {
+    return;
+  }
+  const preview = refs.detailPanel.querySelector(`[data-notes-markdown-preview-id="${tutorialId}"]`);
+  const editor = refs.detailPanel.querySelector(`[data-notes-editor-id="${tutorialId}"]`);
+  if (!(editor instanceof HTMLTextAreaElement)) {
+    return;
+  }
+  updatePrimaryNotesMarkdownPreview(tutorialId, editor.value);
+  editor.classList.add("hidden");
+  preview?.classList.remove("hidden");
+  syncDetailEditorsLayout(tutorialId);
+}
+
+function openExtraNoteEditor(tutorialId, blockId) {
+  if (!tutorialId || !blockId) {
+    return;
+  }
+  const preview = refs.detailPanel.querySelector(`[data-extra-note-markdown-preview-id="${blockId}"]`);
+  const editor = refs.detailPanel.querySelector(
+    `[data-extra-block-field="note"][data-extra-block-note-id="${blockId}"][data-extra-block-tutorial-id="${tutorialId}"]`
+  );
+  if (!(editor instanceof HTMLTextAreaElement)) {
+    return;
+  }
+  preview?.classList.remove("hidden");
+  editor.classList.remove("hidden");
+  const len = editor.value.length;
+  editor.focus();
+  editor.setSelectionRange(len, len);
+  syncDetailEditorsLayout(tutorialId);
+}
+
+function closeExtraNoteEditor(tutorialId, blockId) {
+  if (!tutorialId || !blockId) {
+    return;
+  }
+  const preview = refs.detailPanel.querySelector(`[data-extra-note-markdown-preview-id="${blockId}"]`);
+  const editor = refs.detailPanel.querySelector(
+    `[data-extra-block-field="note"][data-extra-block-note-id="${blockId}"][data-extra-block-tutorial-id="${tutorialId}"]`
+  );
+  if (!(editor instanceof HTMLTextAreaElement)) {
+    return;
+  }
+  updateExtraNoteMarkdownPreview(blockId, editor.value);
+  editor.classList.add("hidden");
+  preview?.classList.remove("hidden");
+  syncDetailEditorsLayout(tutorialId);
+}
+
+function openExtraTextEditor(tutorialId, blockId) {
+  if (!tutorialId || !blockId) {
+    return;
+  }
+  const preview = refs.detailPanel.querySelector(`[data-extra-markdown-preview-id="${blockId}"]`);
+  const editor = refs.detailPanel.querySelector(
+    `[data-extra-block-field="text"][data-extra-block-id="${blockId}"][data-extra-block-tutorial-id="${tutorialId}"]`
+  );
+  if (!(editor instanceof HTMLTextAreaElement)) {
+    return;
+  }
+  preview?.classList.remove("hidden");
+  editor.classList.remove("hidden");
+  autoGrowTextarea(editor, 120);
+  const len = editor.value.length;
+  editor.focus();
+  editor.setSelectionRange(len, len);
+  syncDetailEditorsLayout(tutorialId);
+}
+
+function closeExtraTextEditor(tutorialId, blockId) {
+  if (!tutorialId || !blockId) {
+    return;
+  }
+  const preview = refs.detailPanel.querySelector(`[data-extra-markdown-preview-id="${blockId}"]`);
+  const editor = refs.detailPanel.querySelector(
+    `[data-extra-block-field="text"][data-extra-block-id="${blockId}"][data-extra-block-tutorial-id="${tutorialId}"]`
+  );
+  if (!(editor instanceof HTMLTextAreaElement)) {
+    return;
+  }
+  updateExtraMarkdownPreview(blockId, editor.value);
+  editor.classList.add("hidden");
+  preview?.classList.remove("hidden");
+  syncDetailEditorsLayout(tutorialId);
+}
+
 function findExtraModuleElement(target) {
   return target?.closest?.("[data-extra-module-id], [data-mini-module-id]") || null;
+}
+
+function isStructureLayoutInteractionEnabled() {
+  if (state.tutorialEditMode) {
+    return true;
+  }
+  if (Boolean(refs.dialog?.open) && Boolean(state.editingId)) {
+    return true;
+  }
+  return false;
 }
 
 function getModuleDragMeta(element) {
@@ -937,17 +2252,13 @@ function getModuleDragMeta(element) {
 }
 
 function onTutorialPageDragStart(event) {
-  if (!state.tutorialEditMode) {
+  if (!isStructureLayoutInteractionEnabled()) {
     return;
   }
-  const dragHandle = event.target?.closest?.("[data-extra-drag-handle], [data-mini-drag-handle]");
-  if (!dragHandle) {
-    event.preventDefault();
-    return;
-  }
-  const module = findExtraModuleElement(dragHandle);
+  const module = findExtraModuleElement(event.target);
   const meta = getModuleDragMeta(module);
   if (!meta) {
+    event.preventDefault();
     return;
   }
   const { tutorialId, blockId } = meta;
@@ -962,7 +2273,7 @@ function onTutorialPageDragStart(event) {
 }
 
 function onTutorialPageDragOver(event) {
-  if (!state.tutorialEditMode) {
+  if (!isStructureLayoutInteractionEnabled()) {
     return;
   }
   if (!activeDraggedExtraBlock) {
@@ -985,7 +2296,7 @@ function onTutorialPageDragOver(event) {
 }
 
 async function onTutorialPageDrop(event) {
-  if (!state.tutorialEditMode) {
+  if (!isStructureLayoutInteractionEnabled()) {
     return;
   }
   if (!activeDraggedExtraBlock) {
@@ -1013,7 +2324,7 @@ function onTutorialPageDragEnd() {
 }
 
 function clearExtraModuleDropState() {
-  refs.detailPanel.querySelectorAll(".is-dragging, .is-drop-target").forEach((element) => {
+  document.querySelectorAll(".is-dragging, .is-drop-target").forEach((element) => {
     element.classList.remove("is-dragging", "is-drop-target");
   });
 }
@@ -1026,7 +2337,7 @@ async function reorderExtraBlocksLegacy(tutorialId, draggingBlockId, targetBlock
   if (!tutorial) {
     return;
   }
-  const blocks = normalizeExtraContentBlocks(tutorial.extraContent);
+  const blocks = normalizeExtraContentBlocks(tutorial.extraContent, resolveTutorialNotesSide(tutorial));
   const fromIndex = blocks.findIndex((block) => block.id === draggingBlockId);
   const toIndex = blocks.findIndex((block) => block.id === targetBlockId);
   if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) {
@@ -1035,12 +2346,12 @@ async function reorderExtraBlocksLegacy(tutorialId, draggingBlockId, targetBlock
 
   const nextBlocks = [...blocks];
   const [moving] = nextBlocks.splice(fromIndex, 1);
-  const insertionIndex = fromIndex < toIndex ? toIndex - 1 : toIndex;
+  const insertionIndex = toIndex;
   nextBlocks.splice(insertionIndex, 0, moving);
   const updatedAt = new Date().toISOString();
   const payload = {
     ...tutorial,
-    extraContent: normalizeExtraContentBlocks(nextBlocks),
+    extraContent: normalizeExtraContentBlocks(nextBlocks, resolveTutorialNotesSide(tutorial)),
     updatedAt,
   };
   try {
@@ -1062,7 +2373,7 @@ async function reorderExtraBlocks(tutorialId, draggingBlockId, targetBlockId) {
   if (!tutorial) {
     return;
   }
-  const blocks = normalizeExtraContentBlocks(tutorial.extraContent);
+  const blocks = normalizeExtraContentBlocks(tutorial.extraContent, resolveTutorialNotesSide(tutorial));
   const fromIndex = blocks.findIndex((block) => block.id === draggingBlockId);
   const toIndex = blocks.findIndex((block) => block.id === targetBlockId);
   if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) {
@@ -1071,13 +2382,13 @@ async function reorderExtraBlocks(tutorialId, draggingBlockId, targetBlockId) {
 
   const nextBlocks = [...blocks];
   const [moving] = nextBlocks.splice(fromIndex, 1);
-  const insertionIndex = fromIndex < toIndex ? toIndex - 1 : toIndex;
+  const insertionIndex = toIndex;
   nextBlocks.splice(insertionIndex, 0, moving);
 
   const updatedAt = new Date().toISOString();
   const payload = {
     ...tutorial,
-    extraContent: normalizeExtraContentBlocks(nextBlocks),
+    extraContent: normalizeExtraContentBlocks(nextBlocks, resolveTutorialNotesSide(tutorial)),
     updatedAt,
   };
   try {
@@ -1103,7 +2414,7 @@ async function moveExtraContentBlock(tutorialId, blockId, direction) {
   if (!tutorial) {
     return;
   }
-  const blocks = normalizeExtraContentBlocks(tutorial.extraContent);
+  const blocks = normalizeExtraContentBlocks(tutorial.extraContent, resolveTutorialNotesSide(tutorial));
   const currentIndex = blocks.findIndex((block) => block.id === blockId);
   if (currentIndex < 0) {
     return;
@@ -1120,7 +2431,7 @@ async function moveExtraContentBlock(tutorialId, blockId, direction) {
   const updatedAt = new Date().toISOString();
   const payload = {
     ...tutorial,
-    extraContent: normalizeExtraContentBlocks(nextBlocks),
+    extraContent: normalizeExtraContentBlocks(nextBlocks, resolveTutorialNotesSide(tutorial)),
     updatedAt,
   };
   try {
@@ -1172,22 +2483,41 @@ async function onInlineFieldChange(event) {
 }
 
 async function toggleFavorite(id) {
-  const tutorial = state.tutorials.find((item) => item.id === id);
-  if (!tutorial) {
+  const tutorialIndex = state.tutorials.findIndex((item) => item.id === id);
+  if (tutorialIndex < 0) {
     return;
   }
+  const tutorial = state.tutorials[tutorialIndex];
+  const previousFavorite = Boolean(tutorial.isFavorite);
+  const previousUpdatedAt = tutorial.updatedAt;
+  const optimisticUpdatedAt = new Date().toISOString();
+
+  tutorial.isFavorite = !previousFavorite;
+  tutorial.updatedAt = optimisticUpdatedAt;
+  state.tutorialsSignature = buildTutorialsSignature(state.tutorials);
+  render();
 
   const payload = {
     ...tutorial,
-    isFavorite: !tutorial.isFavorite,
-    updatedAt: new Date().toISOString(),
+    isFavorite: tutorial.isFavorite,
+    updatedAt: optimisticUpdatedAt,
   };
 
   try {
-    await apiUpdateTutorial(id, payload);
+    const updated = await apiUpdateTutorial(id, payload);
+    const normalized = normalizeTutorial(updated);
+    state.tutorials[tutorialIndex] = normalized;
+    if (state.selectedId === id) {
+      state.selectedId = id;
+    }
+    state.tutorialsSignature = buildTutorialsSignature(state.tutorials);
+    render();
     state.selectedId = id;
-    await refreshTutorials();
   } catch (error) {
+    tutorial.isFavorite = previousFavorite;
+    tutorial.updatedAt = previousUpdatedAt;
+    state.tutorialsSignature = buildTutorialsSignature(state.tutorials);
+    render();
     showOperationError(error, "No se pudo actualizar favorito.");
   }
 }
@@ -1384,6 +2714,792 @@ function renderSavedViews() {
     .join("");
 }
 
+function normalizeUserSettings(value) {
+  const payload = value && typeof value === "object" ? value : {};
+  const storageMode = ["device", "cloud", "peer", "hybrid"].includes(payload.storageMode) ? payload.storageMode : "device";
+  const cloudProvider = ["none", "google_drive", "one_drive", "dropbox", "supabase"].includes(payload.cloudProvider)
+    ? payload.cloudProvider
+    : "none";
+  const lastSyncSummary =
+    payload.lastSyncSummary && typeof payload.lastSyncSummary === "object" && !Array.isArray(payload.lastSyncSummary)
+      ? payload.lastSyncSummary
+      : {};
+  const syncTutorialIds = Array.isArray(payload.syncTutorialIds)
+    ? payload.syncTutorialIds.map((id) => String(id || "").trim()).filter(Boolean)
+    : [];
+  return {
+    storageMode,
+    localRootPath: String(payload.localRootPath || ""),
+    cloudRootPath: String(payload.cloudRootPath || ""),
+    cloudProvider,
+    cloudEnabled: Boolean(payload.cloudEnabled),
+    cloudConnected: Boolean(payload.cloudConnected),
+    cloudAccountName: String(payload.cloudAccountName || ""),
+    cloudConnectedAt: String(payload.cloudConnectedAt || ""),
+    peerEnabled: Boolean(payload.peerEnabled),
+    syncTutorialIds,
+    setupCompleted: Boolean(payload.setupCompleted),
+    lastSyncAt: String(payload.lastSyncAt || ""),
+    lastSyncStatus: ["idle", "ok", "warning", "error"].includes(String(payload.lastSyncStatus || ""))
+      ? String(payload.lastSyncStatus)
+      : "idle",
+    lastSyncSummary,
+    updatedAt: String(payload.updatedAt || ""),
+  };
+}
+
+async function refreshUserSettings() {
+  if (!state.currentUser) {
+    state.userSettings = { ...DEFAULT_USER_SETTINGS };
+    syncStorageSettingsUi();
+    return;
+  }
+  try {
+    const response = await apiGetSettings();
+    state.userSettings = normalizeUserSettings(response);
+  } catch (error) {
+    state.userSettings = { ...DEFAULT_USER_SETTINGS };
+    showOperationError(error, "No se pudo cargar la configuracion de sincronizacion.");
+  } finally {
+    syncStorageSettingsUi();
+    maybeOpenSetupDialog();
+    syncLiveSyncLoopState();
+  }
+}
+
+function buildStorageRoutingHint(settings) {
+  const mode = String(settings?.storageMode || "device");
+  const cloudConnected = Boolean(settings?.cloudConnected);
+  const cloudEnabled = Boolean(settings?.cloudEnabled);
+  const cloudProvider = String(settings?.cloudProvider || "none");
+  const peerEnabled = Boolean(settings?.peerEnabled);
+  const cloudLimitLabel = formatBytesForUi(getEffectiveCloudMediaTransferMaxBytes());
+  const cloudName = formatCloudProviderLabel(cloudProvider);
+
+  if (mode === "device") {
+    return "Solo dispositivo: todo queda local.";
+  }
+  if (mode === "peer") {
+    return "P2P: transfiere entre dispositivos conectados.";
+  }
+  if (!cloudEnabled || cloudProvider === "none" || !cloudConnected) {
+    return "Nube no conectada: el contenido queda local.";
+  }
+  if (peerEnabled) {
+    return `${cloudName}: texto y metadatos por nube; archivos grandes por P2P.`;
+  }
+  return `${cloudName}: texto y metadatos por nube; archivos grandes quedan pendientes. Limite nube temporal: ${cloudLimitLabel}.`;
+}
+
+function buildSyncNowHint(settings) {
+  const mode = String(settings?.storageMode || "device");
+  const cloudConnected = Boolean(settings?.cloudConnected);
+  const cloudEnabled = Boolean(settings?.cloudEnabled);
+  const cloudProvider = String(settings?.cloudProvider || "none");
+  const peerEnabled = Boolean(settings?.peerEnabled);
+  const cloudLimitLabel = formatBytesForUi(getEffectiveCloudMediaTransferMaxBytes());
+  const hasCloudPath = cloudEnabled && cloudConnected && cloudProvider !== "none";
+  const pendingPeer = Number(settings?.lastSyncSummary?.cloud?.pendingPeer || 0);
+  const cloudName = formatCloudProviderLabel(cloudProvider);
+
+  if (mode === "device") {
+    return "Sin nube en este modo.";
+  }
+  if (mode === "peer") {
+    return "Sincroniza con dispositivos conectados (P2P).";
+  }
+  if (!hasCloudPath) {
+    return "Conecta la nube para sincronizar.";
+  }
+
+  const base = `${cloudName}: texto/metadatos + archivos hasta ${cloudLimitLabel}.`;
+  if (pendingPeer > 0) {
+    return `${base} Pendientes grandes: ${pendingPeer} (P2P).`;
+  }
+  if (peerEnabled) {
+    return `${base} Archivos mayores pasan a P2P automaticamente.`;
+  }
+  return `${base} Archivos mayores quedaran pendientes hasta activar P2P.`;
+}
+
+function syncStorageRoutingHintsFromInputs() {
+  const fallback = normalizeUserSettings(state.userSettings);
+  const panelDraft = refs.storageModeSelect ? collectStorageSettingsFromPanel() : fallback;
+  if (refs.storageRoutingHint) {
+    refs.storageRoutingHint.textContent = buildStorageRoutingHint(panelDraft);
+  }
+  if (refs.syncNowHint) {
+    refs.syncNowHint.textContent = buildSyncNowHint(panelDraft);
+  }
+  if (refs.setupRoutingHint) {
+    const setupDraft = refs.setupStorageMode ? collectStorageSettingsFromSetupDialog() : fallback;
+    refs.setupRoutingHint.textContent = buildStorageRoutingHint(setupDraft);
+  }
+}
+
+function syncStorageSettingsUi() {
+  const settings = normalizeUserSettings(state.userSettings);
+  state.userSettings = settings;
+  const cloudLabel = formatCloudProviderLabel(settings.cloudProvider);
+  const cloudStateLabel = settings.cloudConnected ? "conectada" : "sin conectar";
+  const isGoogleDrive = settings.cloudProvider === "google_drive";
+  const isSupabase = settings.cloudProvider === "supabase";
+  const usesRemoteApiSync = isGoogleDrive || isSupabase;
+
+  if (refs.storageModeSelect) {
+    refs.storageModeSelect.value = settings.storageMode;
+  }
+  if (refs.localRootPathInput) {
+    refs.localRootPathInput.value = settings.localRootPath || "";
+  }
+  if (refs.cloudRootPathInput) {
+    refs.cloudRootPathInput.value = settings.cloudRootPath || "";
+    refs.cloudRootPathInput.placeholder = isGoogleDrive
+      ? "Ej: TRAZO (carpeta remota en Google Drive)"
+      : isSupabase
+        ? "Ej: trazo (prefijo remoto en Supabase Storage)"
+        : "Ej: C:\\Users\\TuUsuario\\OneDrive\\TRAZO";
+  }
+  if (refs.cloudProviderSelect) {
+    const hasProviderOption = Array.from(refs.cloudProviderSelect.options).some(
+      (option) => option.value === settings.cloudProvider
+    );
+    refs.cloudProviderSelect.value = hasProviderOption ? settings.cloudProvider : "none";
+  }
+  if (refs.cloudAccountNameInput) {
+    refs.cloudAccountNameInput.value = settings.cloudAccountName || "";
+  }
+  if (refs.cloudSyncEnabled) {
+    refs.cloudSyncEnabled.checked = settings.cloudEnabled;
+  }
+  if (refs.peerSyncEnabled) {
+    refs.peerSyncEnabled.checked = settings.peerEnabled;
+  }
+  if (refs.connectCloudButton) {
+    const shouldShowConnect = isGoogleDrive;
+    refs.connectCloudButton.classList.toggle("hidden", !shouldShowConnect);
+    refs.connectCloudButton.disabled = !shouldShowConnect || settings.cloudConnected;
+    refs.connectCloudButton.textContent = settings.cloudConnected ? "Google Drive conectado" : "Conectar Google Drive";
+  }
+  if (refs.disconnectCloudButton) {
+    const shouldShowDisconnect = isGoogleDrive && settings.cloudConnected;
+    refs.disconnectCloudButton.classList.toggle("hidden", !shouldShowDisconnect);
+    refs.disconnectCloudButton.disabled = !shouldShowDisconnect;
+  }
+  if (refs.pickCloudFolderButton) {
+    refs.pickCloudFolderButton.classList.add("hidden");
+  }
+  if (refs.createCloudFolderButton) {
+    refs.createCloudFolderButton.classList.add("hidden");
+  }
+  if (refs.openCloudSignInButton) {
+    refs.openCloudSignInButton.classList.add("hidden");
+  }
+  if (refs.oauthDiagnosticButton) {
+    refs.oauthDiagnosticButton.classList.add("hidden");
+  }
+  if (refs.oauthDriveDiagnosticButton) {
+    refs.oauthDriveDiagnosticButton.classList.add("hidden");
+  }
+  if (refs.storageSetupStatus) {
+    const cloudSummary =
+      settings.cloudProvider === "none"
+        ? "Sin proveedor"
+        : `${cloudLabel} ${cloudStateLabel}${usesRemoteApiSync ? " (API)" : ""}`;
+    refs.storageSetupStatus.textContent = `Modo: ${settings.storageMode} · Nube: ${cloudSummary} · Tutoriales nube: ${settings.syncTutorialIds.length}`;
+  }
+  syncStorageRoutingHintsFromInputs();
+  if (refs.cloudConnectionStatus) {
+    const connectedAt = settings.cloudConnectedAt
+      ? new Date(settings.cloudConnectedAt).toLocaleString("es-BO", { dateStyle: "short", timeStyle: "short" })
+      : "";
+    const dateLabel = connectedAt ? ` · Desde: ${connectedAt}` : "";
+    if (settings.cloudProvider === "none") {
+      refs.cloudConnectionStatus.textContent = "Proveedor desactivado.";
+    } else if (isSupabase) {
+      refs.cloudConnectionStatus.textContent = settings.cloudConnected
+        ? `Supabase integrado por backend (sin login manual)${dateLabel}.`
+        : "Supabase integrado por backend. Guarda configuracion para activarlo.";
+    } else {
+      refs.cloudConnectionStatus.textContent = `${cloudLabel}: ${cloudStateLabel}${dateLabel}.`;
+    }
+  }
+  if (refs.lastSyncMeta) {
+    refs.lastSyncMeta.textContent = buildLastSyncMeta(settings);
+    refs.lastSyncMeta.classList.toggle("is-error", settings.lastSyncStatus === "error");
+  }
+  if (refs.lastSyncDetails) {
+    const detailItems = buildLastSyncDetailItems(settings);
+    refs.lastSyncDetails.innerHTML = detailItems.length
+      ? detailItems.map((item) => `<li>${escapeHtml(item)}</li>`).join("")
+      : `<li class="meta">Aun no hay ejecuciones registradas.</li>`;
+  }
+
+  if (refs.setupStorageMode) {
+    refs.setupStorageMode.value = settings.storageMode;
+  }
+  if (refs.setupLocalRootPath) {
+    refs.setupLocalRootPath.value = settings.localRootPath || "";
+  }
+  if (refs.setupCloudProvider) {
+    refs.setupCloudProvider.value = settings.cloudProvider;
+  }
+  if (refs.setupCloudRootPath) {
+    refs.setupCloudRootPath.value = settings.cloudRootPath || "";
+    refs.setupCloudRootPath.placeholder = isGoogleDrive
+      ? "Ej: TRAZO (carpeta remota en Google Drive)"
+      : isSupabase
+        ? "Ej: trazo (prefijo remoto en Supabase Storage)"
+        : "Ej: C:\\Users\\TuUsuario\\OneDrive\\TRAZO";
+  }
+  if (refs.setupCloudSyncEnabled) {
+    refs.setupCloudSyncEnabled.checked = settings.cloudEnabled;
+  }
+  if (refs.setupPeerSyncEnabled) {
+    refs.setupPeerSyncEnabled.checked = settings.peerEnabled;
+  }
+  if (refs.createSetupCloudFolderButton) {
+    refs.createSetupCloudFolderButton.disabled = usesRemoteApiSync;
+  }
+
+  if (refs.setupTutorialSyncList) {
+    if (!state.tutorials.length) {
+      refs.setupTutorialSyncList.innerHTML = `<p class="meta">Aun no hay tutoriales.</p>`;
+    } else {
+      const selected = new Set(settings.syncTutorialIds);
+      refs.setupTutorialSyncList.innerHTML = state.tutorials
+        .slice(0, 120)
+        .map((tutorial) => {
+          const checked = selected.has(tutorial.id) ? "checked" : "";
+          const token = renderSidebarTutorialToken(tutorial);
+          return `
+            <label class="column-option">
+              <input type="checkbox" data-sync-tutorial-id="${tutorial.id}" ${checked} />
+              <span class="sync-tutorial-line">${token}<span>${escapeHtml(tutorial.title)}</span></span>
+            </label>
+          `;
+        })
+        .join("");
+    }
+  }
+}
+
+function formatCloudProviderLabel(provider) {
+  const value = String(provider || "none");
+  if (value === "google_drive") {
+    return "Google Drive";
+  }
+  if (value === "supabase") {
+    return "Supabase";
+  }
+  if (value === "one_drive") {
+    return "OneDrive";
+  }
+  if (value === "dropbox") {
+    return "Dropbox";
+  }
+  return "sin proveedor";
+}
+
+function buildLastSyncMeta(settings) {
+  const statusMap = {
+    idle: "sin ejecuciones",
+    ok: "correcta",
+    warning: "con avisos",
+    error: "con error",
+  };
+  const statusLabel = statusMap[settings.lastSyncStatus] || statusMap.idle;
+  if (!settings.lastSyncAt) {
+    return `Ultima sincronizacion: ${statusLabel}`;
+  }
+  const formattedDate = new Date(settings.lastSyncAt).toLocaleString("es-BO", {
+    dateStyle: "short",
+    timeStyle: "short",
+  });
+  return `Ultima sincronizacion: ${formattedDate} (${statusLabel})`;
+}
+
+function buildLastSyncDetailItems(settings) {
+  if (!settings.lastSyncAt) {
+    return [];
+  }
+  const summary = settings.lastSyncSummary && typeof settings.lastSyncSummary === "object" ? settings.lastSyncSummary : {};
+  const total = Number(summary.totalTutorials || 0);
+  const synced = Number(summary.syncedTutorials || 0);
+  const local = summary.local && typeof summary.local === "object" ? summary.local : {};
+  const cloud = summary.cloud && typeof summary.cloud === "object" ? summary.cloud : {};
+  const items = [
+    `Tutoriales detectados: ${total}`,
+    `Tutoriales sincronizados: ${synced}`,
+    `Local -> ${Number(local.synced || 0)} sincronizados / ${Number(local.errors || 0)} errores`,
+    `Nube -> ${Number(cloud.synced || 0)} sincronizados / ${Number(cloud.skipped || 0)} omitidos / ${Number(cloud.errors || 0)} errores`,
+  ];
+  if (Number(cloud.downloaded || 0) > 0 || Number(cloud.deleted || 0) > 0 || Number(cloud.cleaned || 0) > 0) {
+    items.push(
+      `Nube pull -> ${Number(cloud.downloaded || 0)} descargados / ${Number(cloud.deleted || 0)} eliminados / ${Number(cloud.cleaned || 0)} limpiados`
+    );
+  }
+  if (Number(cloud.pendingPeer || 0) > 0) {
+    items.push(`Pendiente entre dispositivos (archivos grandes): ${Number(cloud.pendingPeer || 0)}`);
+  }
+  if (Array.isArray(summary.errors) && summary.errors.length) {
+    summary.errors.slice(0, 3).forEach((errorText) => items.push(`Aviso: ${String(errorText)}`));
+  }
+  return items;
+}
+
+function collectStorageSettingsFromPanel() {
+  const selectedIds = Array.from(refs.setupTutorialSyncList?.querySelectorAll("[data-sync-tutorial-id]:checked") || [])
+    .map((input) => input.getAttribute("data-sync-tutorial-id") || "")
+    .filter(Boolean);
+  return normalizeUserSettings({
+    storageMode: refs.storageModeSelect?.value || state.userSettings.storageMode,
+    localRootPath: refs.localRootPathInput?.value || "",
+    cloudRootPath: refs.cloudRootPathInput?.value || "",
+    cloudProvider: refs.cloudProviderSelect?.value || "none",
+    cloudAccountName: "",
+    cloudConnected: state.userSettings.cloudConnected,
+    cloudConnectedAt: state.userSettings.cloudConnectedAt,
+    cloudEnabled: refs.cloudSyncEnabled?.checked || false,
+    peerEnabled: refs.peerSyncEnabled?.checked || false,
+    syncTutorialIds: selectedIds,
+    setupCompleted: true,
+    lastSyncAt: state.userSettings.lastSyncAt,
+    lastSyncStatus: state.userSettings.lastSyncStatus,
+    lastSyncSummary: state.userSettings.lastSyncSummary,
+  });
+}
+
+function collectStorageSettingsFromSetupDialog() {
+  return normalizeUserSettings({
+    storageMode: refs.setupStorageMode?.value || state.userSettings.storageMode,
+    localRootPath: refs.setupLocalRootPath?.value || "",
+    cloudRootPath: refs.setupCloudRootPath?.value || "",
+    cloudProvider: refs.setupCloudProvider?.value || "none",
+    cloudAccountName: "",
+    cloudConnected: state.userSettings.cloudConnected,
+    cloudConnectedAt: state.userSettings.cloudConnectedAt,
+    cloudEnabled: refs.setupCloudSyncEnabled?.checked || false,
+    peerEnabled: refs.setupPeerSyncEnabled?.checked || false,
+    syncTutorialIds: state.userSettings.syncTutorialIds || [],
+    setupCompleted: true,
+    lastSyncAt: state.userSettings.lastSyncAt,
+    lastSyncStatus: state.userSettings.lastSyncStatus,
+    lastSyncSummary: state.userSettings.lastSyncSummary,
+  });
+}
+
+async function saveStorageSettingsFromPanel() {
+  if (!state.currentUser) {
+    return;
+  }
+  const payload = collectStorageSettingsFromPanel();
+  try {
+    let updated = normalizeUserSettings(await apiUpdateSettings(payload));
+    if (updated.cloudProvider === "supabase" && updated.cloudEnabled && !updated.cloudConnected) {
+      updated = normalizeUserSettings(await apiConnectCloudProvider("supabase", ""));
+    }
+    state.userSettings = updated;
+    syncStorageSettingsUi();
+    syncLiveSyncLoopState();
+    setSyncStatus(`Configuracion guardada · ${new Date().toLocaleTimeString("es-BO", { hour: "2-digit", minute: "2-digit" })}`);
+  } catch (error) {
+    showOperationError(error, "No se pudo guardar la configuracion de sincronizacion.");
+  }
+}
+
+async function createLocalFolderFromPanel() {
+  const value = String(refs.localRootPathInput?.value || "").trim();
+  if (!value) {
+    window.alert("Escribe primero la ruta de carpeta local.");
+    return;
+  }
+  try {
+    const created = await apiCreateLocalFolder(value);
+    refs.localRootPathInput.value = created.path || value;
+    if (refs.storageSetupStatus) {
+      refs.storageSetupStatus.textContent = `Carpeta creada: ${created.path || value}`;
+    }
+  } catch (error) {
+    showOperationError(error, "No se pudo crear la carpeta local.");
+  }
+}
+
+async function createCloudFolderFromPanel() {
+  const provider = String(refs.cloudProviderSelect?.value || "none");
+  if (provider === "google_drive" || provider === "supabase") {
+    const remoteRoot = String(refs.cloudRootPathInput?.value || "").trim();
+    if (!remoteRoot) {
+      window.alert(
+        provider === "google_drive"
+          ? "Escribe un nombre para la carpeta remota de Google Drive."
+          : "Escribe el prefijo remoto que usara Supabase Storage."
+      );
+      return;
+    }
+    if (refs.storageSetupStatus) {
+      refs.storageSetupStatus.textContent =
+        provider === "google_drive"
+          ? `Carpeta remota de Google Drive definida: ${remoteRoot}`
+          : `Prefijo remoto de Supabase definido: ${remoteRoot}`;
+    }
+    return;
+  }
+  const value = String(refs.cloudRootPathInput?.value || "").trim();
+  if (!value) {
+    window.alert("Escribe primero la ruta de carpeta nube.");
+    return;
+  }
+  try {
+    const created = await apiCreateLocalFolder(value);
+    if (refs.cloudRootPathInput) {
+      refs.cloudRootPathInput.value = created.path || value;
+    }
+    if (refs.storageSetupStatus) {
+      refs.storageSetupStatus.textContent = `Carpeta nube creada: ${created.path || value}`;
+    }
+  } catch (error) {
+    showOperationError(error, "No se pudo crear la carpeta nube.");
+  }
+}
+
+async function pickLocalFolderFromExplorer(target = "local") {
+  if (!state.currentUser) {
+    return;
+  }
+  const provider = String(refs.cloudProviderSelect?.value || "none");
+  if (target === "cloud" && (provider === "google_drive" || provider === "supabase")) {
+    window.alert(
+      provider === "google_drive"
+        ? "Con Google Drive por API directa no se elige carpeta local. Usa el campo de carpeta nube para el nombre remoto."
+        : "Con Supabase por API directa no se elige carpeta local de nube. Usa el campo de carpeta nube como prefijo remoto."
+    );
+    return;
+  }
+  try {
+    const description =
+      target === "cloud"
+        ? "Selecciona la carpeta sincronizada por tu proveedor cloud"
+        : "Selecciona la carpeta local principal de TRAZO";
+    const picked = await apiPickFolder(description);
+    const pickedPath = String(picked?.path || "").trim();
+    if (!pickedPath) {
+      return;
+    }
+    if (target === "cloud") {
+      if (refs.cloudRootPathInput) {
+        refs.cloudRootPathInput.value = pickedPath;
+      }
+      setSyncStatus(`Carpeta nube seleccionada: ${pickedPath}`);
+    } else {
+      if (refs.localRootPathInput) {
+        refs.localRootPathInput.value = pickedPath;
+      }
+      setSyncStatus(`Carpeta local seleccionada: ${pickedPath}`);
+    }
+  } catch (error) {
+    showOperationError(error, "No se pudo abrir el explorador de carpetas.");
+  }
+}
+
+function openSelectedCloudProviderSignIn() {
+  let provider = String(refs.cloudProviderSelect?.value || "none");
+  if (provider === "none") {
+    const fallbackProvider =
+      state.userSettings?.cloudProvider && state.userSettings.cloudProvider !== "none"
+        ? state.userSettings.cloudProvider
+        : "google_drive";
+    provider = fallbackProvider;
+    if (refs.cloudProviderSelect) {
+      refs.cloudProviderSelect.value = provider;
+    }
+  }
+  if (provider === "google_drive") {
+    const returnTo = encodeURIComponent(window.location.pathname + window.location.search + (window.location.hash || "#/settings"));
+    window.location.href = `/oauth/google/start?returnTo=${returnTo}`;
+    return;
+  }
+  if (provider === "supabase") {
+    window.alert("Supabase no requiere OAuth en esta app. Usa 'Conectar cuenta seleccionada'.");
+    return;
+  }
+  const providerUrls = {
+    one_drive: "https://login.live.com/",
+    dropbox: "https://www.dropbox.com/login",
+  };
+  const url = providerUrls[provider];
+  if (!url) {
+    window.alert("Primero selecciona un proveedor de nube.");
+    return;
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
+function runGoogleOauthDiagnostic() {
+  const provider = String(refs.cloudProviderSelect?.value || "none");
+  if (provider !== "google_drive") {
+    window.alert("Para esta prueba, selecciona Google Drive como proveedor.");
+    return;
+  }
+  const returnTo = encodeURIComponent(window.location.pathname + window.location.search + (window.location.hash || "#/settings"));
+  window.location.href = `/oauth/google/diagnostic/start?returnTo=${returnTo}`;
+}
+
+function runGoogleDriveOauthDiagnostic() {
+  const provider = String(refs.cloudProviderSelect?.value || "none");
+  if (provider !== "google_drive") {
+    window.alert("Para esta prueba, selecciona Google Drive como proveedor.");
+    return;
+  }
+  const returnTo = encodeURIComponent(window.location.pathname + window.location.search + (window.location.hash || "#/settings"));
+  window.location.href = `/oauth/google/diagnostic/start?mode=drive&returnTo=${returnTo}`;
+}
+
+async function connectCloudProviderFromPanel() {
+  if (!state.currentUser) {
+    return;
+  }
+  let provider = String(refs.cloudProviderSelect?.value || "none");
+  if (provider === "none") {
+    const fallbackProvider =
+      state.userSettings?.cloudProvider && state.userSettings.cloudProvider !== "none"
+        ? state.userSettings.cloudProvider
+        : "google_drive";
+    provider = fallbackProvider;
+    if (refs.cloudProviderSelect) {
+      refs.cloudProviderSelect.value = provider;
+    }
+  }
+  if (provider === "google_drive") {
+    try {
+      const draftSettings = collectStorageSettingsFromPanel();
+      await apiUpdateSettings({
+        ...draftSettings,
+        cloudProvider: provider,
+      });
+    } catch {
+      // Continue to OAuth start even if this best-effort update fails.
+    }
+    const returnTo = encodeURIComponent(window.location.pathname + window.location.search + (window.location.hash || "#/settings"));
+    window.location.href = `/oauth/google/start?returnTo=${returnTo}`;
+    return;
+  }
+  try {
+    const draftSettings = collectStorageSettingsFromPanel();
+    await apiUpdateSettings({
+      ...draftSettings,
+      cloudProvider: provider,
+    });
+    const connected = await apiConnectCloudProvider(provider, "");
+    state.userSettings = normalizeUserSettings(connected);
+    syncStorageSettingsUi();
+    syncLiveSyncLoopState();
+    setSyncStatus(`Proveedor conectado: ${formatCloudProviderLabel(provider)}`);
+  } catch (error) {
+    showOperationError(error, "No se pudo conectar el proveedor de nube.");
+  }
+}
+
+async function disconnectCloudProviderFromPanel() {
+  if (!state.currentUser) {
+    return;
+  }
+  try {
+    const next = await apiDisconnectCloudProvider();
+    state.userSettings = normalizeUserSettings(next);
+    syncStorageSettingsUi();
+    syncLiveSyncLoopState();
+    setSyncStatus("Proveedor de nube desconectado.");
+  } catch (error) {
+    showOperationError(error, "No se pudo desconectar el proveedor de nube.");
+  }
+}
+
+async function createLocalFolderFromSetupDialog() {
+  const value = String(refs.setupLocalRootPath?.value || "").trim();
+  if (!value) {
+    setSetupStatus("Escribe una carpeta primero.", true);
+    return;
+  }
+  try {
+    const created = await apiCreateLocalFolder(value);
+    refs.setupLocalRootPath.value = created.path || value;
+    setSetupStatus(`Carpeta creada: ${created.path || value}`);
+  } catch (error) {
+    setSetupStatus(resolveError(error, "No se pudo crear la carpeta local."), true);
+  }
+}
+
+async function createCloudFolderFromSetupDialog() {
+  const provider = String(refs.setupCloudProvider?.value || "none");
+  if (provider === "google_drive" || provider === "supabase") {
+    const remoteRoot = String(refs.setupCloudRootPath?.value || "").trim();
+    if (!remoteRoot) {
+      setSetupStatus(
+        provider === "google_drive"
+          ? "Escribe un nombre para la carpeta remota de Google Drive."
+          : "Escribe el prefijo remoto para Supabase Storage.",
+        true
+      );
+      return;
+    }
+    setSetupStatus(
+      provider === "google_drive"
+        ? `Carpeta remota de Google Drive definida: ${remoteRoot}`
+        : `Prefijo remoto de Supabase definido: ${remoteRoot}`
+    );
+    return;
+  }
+  const value = String(refs.setupCloudRootPath?.value || "").trim();
+  if (!value) {
+    setSetupStatus("Escribe una carpeta nube primero.", true);
+    return;
+  }
+  try {
+    const created = await apiCreateLocalFolder(value);
+    if (refs.setupCloudRootPath) {
+      refs.setupCloudRootPath.value = created.path || value;
+    }
+    setSetupStatus(`Carpeta nube creada: ${created.path || value}`);
+  } catch (error) {
+    setSetupStatus(resolveError(error, "No se pudo crear la carpeta nube."), true);
+  }
+}
+
+async function saveSetupDialogSettings() {
+  if (!state.currentUser) {
+    return;
+  }
+  const payload = collectStorageSettingsFromSetupDialog();
+  refs.saveSetupButton.disabled = true;
+  try {
+    let updated = normalizeUserSettings(await apiUpdateSettings(payload));
+    if (updated.cloudProvider === "supabase" && updated.cloudEnabled && !updated.cloudConnected) {
+      updated = normalizeUserSettings(await apiConnectCloudProvider("supabase", ""));
+    }
+    state.userSettings = updated;
+    syncStorageSettingsUi();
+    syncLiveSyncLoopState();
+    setSyncStatus(`Configuracion inicial guardada · ${new Date().toLocaleTimeString("es-BO", { hour: "2-digit", minute: "2-digit" })}`);
+    refs.setupDialog?.close();
+  } catch (error) {
+    setSetupStatus(resolveError(error, "No se pudo guardar la configuracion inicial."), true);
+  } finally {
+    refs.saveSetupButton.disabled = false;
+  }
+}
+
+async function runStorageSyncNow() {
+  if (!state.currentUser) {
+    return;
+  }
+  try {
+    const result = await apiRunStorageSync();
+    const count = Number(result?.syncedTutorials || 0);
+    if (result?.settings) {
+      state.userSettings = normalizeUserSettings(result.settings);
+      syncStorageSettingsUi();
+      syncLiveSyncLoopState();
+    } else {
+      await refreshUserSettings();
+    }
+    const status = String(state.userSettings.lastSyncStatus || "idle");
+    setSyncStatus(`Sincronizacion completada | ${count} tutorial(es) | estado: ${status}`);
+    return;
+    setSyncStatus(`Sincronizacion completada · ${count} tutorial(es)`);
+  } catch (error) {
+    showOperationError(error, "No se pudo ejecutar la sincronizacion.");
+  }
+}
+
+function exportDeviceSyncPackage() {
+  if (!state.currentUser) {
+    return;
+  }
+  const selected =
+    Array.isArray(state.userSettings.syncTutorialIds) && state.userSettings.syncTutorialIds.length
+      ? new Set(state.userSettings.syncTutorialIds)
+      : null;
+  const tutorials = selected ? state.tutorials.filter((item) => selected.has(item.id)) : [...state.tutorials];
+  const payload = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    app: "TRAZO",
+    settings: state.userSettings,
+    tutorials,
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `trazo-sync-package-${new Date().toISOString().slice(0, 10)}.json`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+async function importDeviceSyncPackage(event) {
+  const file = event.target.files?.[0];
+  if (!file) {
+    return;
+  }
+  try {
+    const parsed = JSON.parse(await file.text());
+    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.tutorials)) {
+      throw new Error("Formato de paquete invalido.");
+    }
+    const incomingSettings = normalizeUserSettings(parsed.settings || {});
+    await apiReplaceTutorials(parsed.tutorials.map(normalizeTutorial));
+    await apiUpdateSettings({
+      ...incomingSettings,
+      setupCompleted: true,
+    });
+    await refreshTutorials();
+    await refreshUserSettings();
+    window.alert(`Paquete importado: ${parsed.tutorials.length} tutorial(es).`);
+  } catch (error) {
+    showOperationError(error, "No se pudo importar el paquete de dispositivo.");
+  } finally {
+    if (refs.importDevicePackageInput) {
+      refs.importDevicePackageInput.value = "";
+    }
+  }
+}
+
+function maybeOpenSetupDialog() {
+  if (!state.currentUser || !refs.setupDialog?.showModal) {
+    return;
+  }
+  if (state.userSettings.setupCompleted) {
+    return;
+  }
+  if (!refs.setupDialog.open) {
+    setSetupStatus("");
+    refs.setupDialog.showModal();
+  }
+}
+
+function setSetupStatus(message, isError = false) {
+  if (!refs.setupStatus) {
+    return;
+  }
+  refs.setupStatus.textContent = message;
+  refs.setupStatus.classList.toggle("is-error", Boolean(isError));
+}
+
+function onSettingsTutorialSyncChange() {
+  if (!refs.setupTutorialSyncList) {
+    return;
+  }
+  const selectedIds = Array.from(refs.setupTutorialSyncList.querySelectorAll("[data-sync-tutorial-id]:checked"))
+    .map((input) => input.getAttribute("data-sync-tutorial-id") || "")
+    .filter(Boolean);
+  state.userSettings = {
+    ...state.userSettings,
+    syncTutorialIds: selectedIds,
+  };
+  syncStorageSettingsUi();
+}
+
 function getCurrentFilterSnapshot() {
   return {
     search: state.search,
@@ -1469,6 +3585,76 @@ function getInitialTheme() {
   return "light";
 }
 
+function getInitialSidebarCollapsed() {
+  try {
+    const stored = localStorage.getItem("tv_sidebar_collapsed");
+    if (stored === "1" || stored === "0") {
+      return stored === "1";
+    }
+  } catch {
+    // no-op
+  }
+  return isCompactSidebarViewport();
+}
+
+function isCompactSidebarViewport() {
+  return typeof window !== "undefined" && window.matchMedia(`(max-width: ${MOBILE_SIDEBAR_BREAKPOINT}px)`).matches;
+}
+
+function syncSidebarBackdrop() {
+  const shouldShowBackdrop = isCompactSidebarViewport() && !state.sidebarCollapsed;
+  refs.sidebarBackdrop?.classList.toggle("hidden", !shouldShowBackdrop);
+  document.body.classList.toggle("body-lock-scroll", shouldShowBackdrop);
+}
+
+function syncResponsiveShell() {
+  const compact = isCompactSidebarViewport();
+  refs.appShell?.classList.toggle("is-compact-shell", compact);
+
+  if (compact !== wasCompactSidebarViewport) {
+    if (compact) {
+      if (!state.sidebarCollapsed) {
+        sidebarAutoCollapsed = true;
+        applySidebarCollapsed(true, { persist: false });
+      }
+    } else if (sidebarAutoCollapsed) {
+      sidebarAutoCollapsed = false;
+      applySidebarCollapsed(false, { persist: false });
+    }
+    wasCompactSidebarViewport = compact;
+  }
+
+  if (!compact) {
+    refs.sidebarBackdrop?.classList.add("hidden");
+    document.body.classList.remove("body-lock-scroll");
+  } else {
+    syncSidebarBackdrop();
+  }
+}
+
+function closeSidebarForCompactNavigation() {
+  if (isCompactSidebarViewport() && !state.sidebarCollapsed) {
+    applySidebarCollapsed(true, { persist: false });
+  }
+}
+
+function applySidebarCollapsed(collapsed, options = {}) {
+  const { persist = true } = options;
+  state.sidebarCollapsed = Boolean(collapsed);
+  refs.appShell?.classList.toggle("is-sidebar-collapsed", state.sidebarCollapsed);
+  refs.sidebarExpandButton?.classList.toggle("hidden", !state.sidebarCollapsed);
+  refs.toggleSidebarButton?.setAttribute("aria-expanded", state.sidebarCollapsed ? "false" : "true");
+  if (refs.toggleSidebarButton) {
+    refs.toggleSidebarButton.title = state.sidebarCollapsed ? "Mostrar menu lateral" : "Plegar menu lateral";
+  }
+  syncSidebarBackdrop();
+  if (persist) {
+    try {
+      localStorage.setItem("tv_sidebar_collapsed", state.sidebarCollapsed ? "1" : "0");
+    } catch {}
+  }
+}
+
 function getInitialNotesSide() {
   try {
     const saved = localStorage.getItem("tv_notes_side");
@@ -1477,6 +3663,144 @@ function getInitialNotesSide() {
     }
   } catch {}
   return "right";
+}
+
+function getInitialNotesCollapseState() {
+  try {
+    const raw = localStorage.getItem("tv_notes_collapse");
+    if (!raw) {
+      return { primary: {}, extra: {} };
+    }
+    const parsed = JSON.parse(raw);
+    const primary = parsed && typeof parsed.primary === "object" && parsed.primary ? parsed.primary : {};
+    const extra = parsed && typeof parsed.extra === "object" && parsed.extra ? parsed.extra : {};
+    return { primary, extra };
+  } catch {
+    return { primary: {}, extra: {} };
+  }
+}
+
+function persistNotesCollapseState() {
+  try {
+    localStorage.setItem("tv_notes_collapse", JSON.stringify(state.notesCollapse || { primary: {}, extra: {} }));
+  } catch {}
+}
+
+function getExtraNotesCollapseKey(tutorialId, blockId) {
+  return `${String(tutorialId || "").trim()}:${String(blockId || "").trim()}`;
+}
+
+function isPrimaryNotesCollapsed(tutorialId) {
+  if (!tutorialId) {
+    return false;
+  }
+  return Boolean(state.notesCollapse?.primary?.[tutorialId]);
+}
+
+function isExtraNotesCollapsed(tutorialId, blockId) {
+  if (!tutorialId || !blockId) {
+    return false;
+  }
+  return Boolean(state.notesCollapse?.extra?.[getExtraNotesCollapseKey(tutorialId, blockId)]);
+}
+
+function toggleNotesCollapse(tutorialId, blockId = "") {
+  if (!shouldLockNotesHeight()) {
+    return;
+  }
+  if (!tutorialId) {
+    return;
+  }
+  const inSelectedTutorial = state.page === "tutorial" && state.selectedId === tutorialId;
+  const anchorBefore =
+    inSelectedTutorial && blockId
+      ? refs.detailPanel.querySelector(`[data-extra-view-module-id="${blockId}"], [data-extra-text-module-id="${blockId}"]`)
+      : null;
+  const anchorTopBefore = anchorBefore instanceof HTMLElement ? anchorBefore.getBoundingClientRect().top : null;
+
+  if (!state.notesCollapse || typeof state.notesCollapse !== "object") {
+    state.notesCollapse = { primary: {}, extra: {} };
+  }
+  state.notesCollapse.primary = state.notesCollapse.primary || {};
+  state.notesCollapse.extra = state.notesCollapse.extra || {};
+  if (!blockId) {
+    const current = isPrimaryNotesCollapsed(tutorialId);
+    if (current) {
+      delete state.notesCollapse.primary[tutorialId];
+    } else {
+      state.notesCollapse.primary[tutorialId] = true;
+    }
+  } else {
+    const key = getExtraNotesCollapseKey(tutorialId, blockId);
+    const current = isExtraNotesCollapsed(tutorialId, blockId);
+    if (current) {
+      delete state.notesCollapse.extra[key];
+    } else {
+      state.notesCollapse.extra[key] = true;
+    }
+  }
+  persistNotesCollapseState();
+  const nextCollapsed = blockId
+    ? isExtraNotesCollapsed(tutorialId, blockId)
+    : isPrimaryNotesCollapsed(tutorialId);
+
+  if (inSelectedTutorial && blockId) {
+    const module = refs.detailPanel.querySelector(
+      `[data-extra-view-module-id="${blockId}"], [data-extra-text-module-id="${blockId}"]`
+    );
+    if (module instanceof HTMLElement) {
+      module.classList.toggle("is-note-collapsed", nextCollapsed);
+      const noteSection = module.querySelector(".media-module-note");
+      if (noteSection instanceof HTMLElement) {
+        noteSection.classList.toggle("is-collapsed", nextCollapsed);
+      }
+      module.querySelectorAll(`[data-toggle-notes-block-id="${blockId}"]`).forEach((buttonNode) => {
+        if (!(buttonNode instanceof HTMLButtonElement)) {
+          return;
+        }
+        buttonNode.textContent = nextCollapsed ? "Mostrar" : "Ocultar";
+        buttonNode.setAttribute("aria-expanded", nextCollapsed ? "false" : "true");
+      });
+      syncDetailEditorsLayout(tutorialId);
+      return;
+    }
+  }
+
+  if (inSelectedTutorial) {
+    renderDetailPanel();
+  } else {
+    render();
+  }
+
+  if (inSelectedTutorial && blockId && Number.isFinite(anchorTopBefore)) {
+    window.requestAnimationFrame(() => {
+      const anchorAfter = refs.detailPanel.querySelector(
+        `[data-extra-view-module-id="${blockId}"], [data-extra-text-module-id="${blockId}"]`
+      );
+      if (!(anchorAfter instanceof HTMLElement)) {
+        return;
+      }
+      const delta = anchorAfter.getBoundingClientRect().top - Number(anchorTopBefore);
+      if (Math.abs(delta) > 1) {
+        window.scrollBy({ top: delta, left: 0, behavior: "auto" });
+      }
+    });
+  }
+}
+
+function normalizeNoteSide(value, fallback = "right") {
+  if (value === "left" || value === "right") {
+    return value;
+  }
+  return fallback === "left" ? "left" : "right";
+}
+
+function resolveTutorialNotesSide(tutorial) {
+  return normalizeNoteSide(tutorial?.notesSide, state.notesSide);
+}
+
+function resolveBlockNotesSide(block, fallback = "right") {
+  return normalizeNoteSide(block?.noteSide, fallback);
 }
 
 function applyTheme(theme) {
@@ -1492,15 +3816,63 @@ function toggleTheme() {
   applyTheme(state.theme === "dark" ? "light" : "dark");
 }
 
-function toggleNotesSide() {
-  if (state.tutorialEditMode) {
-    void flushPendingAutosaves();
+async function toggleNotesSide(tutorialId, blockId = "") {
+  const targetTutorialId = tutorialId || state.selectedId;
+  if (!targetTutorialId) {
+    return;
   }
-  state.notesSide = state.notesSide === "left" ? "right" : "left";
+  const tutorial = state.tutorials.find((item) => item.id === targetTutorialId);
+  if (!tutorial) {
+    return;
+  }
+  const updatedAt = new Date().toISOString();
+
+  if (!blockId) {
+    const nextPrimarySide = resolveTutorialNotesSide(tutorial) === "left" ? "right" : "left";
+    const payload = {
+      ...tutorial,
+      notesSide: nextPrimarySide,
+      updatedAt,
+    };
+    try {
+      await apiUpdateTutorial(targetTutorialId, payload);
+      tutorial.notesSide = nextPrimarySide;
+      tutorial.updatedAt = updatedAt;
+      state.notesSide = nextPrimarySide;
+      try {
+        localStorage.setItem("tv_notes_side", state.notesSide);
+      } catch {}
+      render();
+    } catch (error) {
+      showOperationError(error, "No se pudo cambiar el lado de las notas.");
+    }
+    return;
+  }
+
+  const blocks = normalizeExtraContentBlocks(tutorial.extraContent, resolveTutorialNotesSide(tutorial));
+  const index = blocks.findIndex((item) => item.id === blockId);
+  if (index < 0) {
+    return;
+  }
+  const current = blocks[index];
+  const nextBlocks = [...blocks];
+  nextBlocks[index] = {
+    ...current,
+    noteSide: resolveBlockNotesSide(current, resolveTutorialNotesSide(tutorial)) === "left" ? "right" : "left",
+  };
+  const payload = {
+    ...tutorial,
+    extraContent: normalizeExtraContentBlocks(nextBlocks, resolveTutorialNotesSide(tutorial)),
+    updatedAt,
+  };
   try {
-    localStorage.setItem("tv_notes_side", state.notesSide);
-  } catch {}
-  render();
+    await apiUpdateTutorial(targetTutorialId, payload);
+    tutorial.extraContent = payload.extraContent;
+    tutorial.updatedAt = updatedAt;
+    render();
+  } catch (error) {
+    showOperationError(error, "No se pudo cambiar el lado de notas del bloque.");
+  }
 }
 
 function updateThemeToggleLabel() {
@@ -1682,6 +4054,14 @@ function onGlobalKeydown(event) {
   }
 
   if (lower === "escape") {
+    if (isEmojiPickerOpen()) {
+      closeEmojiPickerPanel();
+      return;
+    }
+    if (document.querySelector("[data-window-media-shell].is-window-fullscreen")) {
+      closeWindowMediaShells();
+      return;
+    }
     if (refs.searchDialog?.open) {
       closeSearchDialog();
       return;
@@ -1696,6 +4076,10 @@ function onGlobalKeydown(event) {
     }
     if (state.page === "settings") {
       goToPage("library");
+      return;
+    }
+    if (isCompactSidebarViewport() && !state.sidebarCollapsed) {
+      applySidebarCollapsed(true, { persist: false });
       return;
     }
     return;
@@ -1774,10 +4158,11 @@ function renderSidebarTutorials() {
       (tutorial) => `
         <button type="button" class="shortcut sidebar-tutorial ${state.selectedId === tutorial.id ? "is-active" : ""}" data-open-id="${tutorial.id}">
           <span class="sidebar-tutorial-line">
-            <span class="sidebar-tutorial-token">${tutorialTypeToken(tutorial.type)}</span>
+            ${renderSidebarTutorialToken(tutorial)}
             <span class="sidebar-tutorial-title" title="${escapeAttribute(tutorial.title)}">${escapeHtml(
               truncateSidebarTitle(tutorial.title)
             )}</span>
+            ${renderTutorialSyncHint(tutorial, "sidebar")}
           </span>
         </button>
       `
@@ -2015,20 +4400,29 @@ function renderReminderPanel() {
       <h3>Recordatorios</h3>
       <p class="meta">${reminders.length} pendientes</p>
     </div>
-    <div class="reminder-list">
+    <ul class="reminder-list">
       ${reminders
         .slice(0, 6)
         .map(
           (item) => `
-            <article class="reminder-item">
+            <li class="reminder-item">
               <button type="button" class="link-cell" data-open-id="${item.id}">${escapeHtml(item.title)}</button>
               <p class="meta">Repaso: ${escapeHtml(item.reviewDate)} · ${escapeHtml(item.category || "Sin categoria")}</p>
-            </article>
+            </li>
           `
         )
         .join("")}
-    </div>
+    </ul>
   `;
+  refs.reminderPanel.querySelectorAll(".reminder-item .meta").forEach((node) => {
+    if (!(node instanceof HTMLElement)) {
+      return;
+    }
+    node.textContent = String(node.textContent || "")
+      .replace(/^Repaso:\s*/i, "")
+      .replace(/\u00C2·/g, "·")
+      .trim();
+  });
   refs.reminderPanel.classList.remove("hidden");
 }
 
@@ -2096,6 +4490,238 @@ function stopReminderLoop() {
   }
 }
 
+function canUseLiveSync(settings = state.userSettings) {
+  return Boolean(state.currentUser);
+}
+
+function supportsLiveEventStream() {
+  return typeof EventSource !== "undefined";
+}
+
+function isLiveEditableElement(node) {
+  if (!(node instanceof HTMLElement)) {
+    return false;
+  }
+  const editingLikeElement =
+    node.isContentEditable ||
+    node instanceof HTMLInputElement ||
+    node instanceof HTMLTextAreaElement ||
+    node instanceof HTMLSelectElement;
+  if (!editingLikeElement) {
+    return false;
+  }
+  return Boolean(node.closest("#tutorialPage")) || Boolean(node.closest("#tutorialDialog"));
+}
+
+function markLiveEditActivity() {
+  liveEditLastAt = Date.now();
+}
+
+function schedulePendingLiveSyncFlush(delayMs = LIVE_EDIT_GRACE_MS) {
+  if (liveSyncPendingFlushTimer) {
+    window.clearTimeout(liveSyncPendingFlushTimer);
+  }
+  liveSyncPendingFlushTimer = window.setTimeout(() => {
+    liveSyncPendingFlushTimer = null;
+    if (!liveSyncPendingApply || !state.currentUser) {
+      return;
+    }
+    if (isTutorialEditingInProgress()) {
+      schedulePendingLiveSyncFlush(LIVE_EDIT_GRACE_MS);
+      return;
+    }
+    void runLiveSyncTick({ force: true });
+  }, Math.max(120, Number(delayMs) || LIVE_EDIT_GRACE_MS));
+}
+
+function isTutorialEditingInProgress() {
+  if (refs.dialog?.open || refs.extraMediaDialog?.open) {
+    return true;
+  }
+  const active = document.activeElement;
+  if (isLiveEditableElement(active)) {
+    return true;
+  }
+  if (Date.now() - liveEditLastAt < LIVE_EDIT_GRACE_MS) {
+    return true;
+  }
+  return Boolean(state.page === "tutorial" && state.tutorialEditMode);
+}
+
+function startLiveSyncLoop() {
+  stopLiveSyncLoop();
+  if (!state.currentUser) {
+    return;
+  }
+  liveSyncIntervalId = window.setInterval(() => {
+    void runLiveSyncTick();
+  }, LIVE_SYNC_POLL_MS);
+  void runLiveSyncTick({ force: true });
+}
+
+function stopLiveSyncLoop() {
+  if (liveSyncIntervalId) {
+    window.clearInterval(liveSyncIntervalId);
+    liveSyncIntervalId = null;
+  }
+  liveSyncInFlight = false;
+  liveSyncPendingApply = false;
+  if (liveSyncPendingFlushTimer) {
+    window.clearTimeout(liveSyncPendingFlushTimer);
+    liveSyncPendingFlushTimer = null;
+  }
+}
+
+function startLiveEventStream() {
+  if (!state.currentUser || !canUseLiveSync() || document.visibilityState === "hidden" || !supportsLiveEventStream()) {
+    return;
+  }
+  if (liveEventSource) {
+    return;
+  }
+  const streamUrl = `${API_BASE}/live/stream`;
+  try {
+    const eventSource = new EventSource(streamUrl, { withCredentials: true });
+    liveEventSource = eventSource;
+    liveEventStreamConnected = false;
+    eventSource.addEventListener("open", () => {
+      liveEventStreamConnected = true;
+    });
+    eventSource.addEventListener("tutorials_changed", () => {
+      queueLiveEventRefresh({ tutorials: true });
+    });
+    eventSource.addEventListener("settings_changed", () => {
+      queueLiveEventRefresh({ settings: true });
+    });
+    eventSource.addEventListener("connected", () => {
+      queueLiveEventRefresh({ tutorials: true, settings: true });
+    });
+    eventSource.onerror = () => {
+      stopLiveEventStream();
+      scheduleLiveEventReconnect();
+      syncLiveSyncLoopState();
+    };
+  } catch {
+    scheduleLiveEventReconnect();
+  }
+}
+
+function stopLiveEventStream() {
+  if (liveEventReconnectTimer) {
+    window.clearTimeout(liveEventReconnectTimer);
+    liveEventReconnectTimer = null;
+  }
+  if (liveEventQueueTimer) {
+    window.clearTimeout(liveEventQueueTimer);
+    liveEventQueueTimer = null;
+  }
+  if (liveSyncPendingFlushTimer) {
+    window.clearTimeout(liveSyncPendingFlushTimer);
+    liveSyncPendingFlushTimer = null;
+  }
+  liveEventQueuedTutorials = false;
+  liveEventQueuedSettings = false;
+  liveEventStreamConnected = false;
+  if (liveEventSource) {
+    try {
+      liveEventSource.close();
+    } catch {}
+    liveEventSource = null;
+  }
+}
+
+function scheduleLiveEventReconnect() {
+  if (liveEventReconnectTimer || !state.currentUser || document.visibilityState === "hidden" || !canUseLiveSync()) {
+    return;
+  }
+  liveEventReconnectTimer = window.setTimeout(() => {
+    liveEventReconnectTimer = null;
+    startLiveEventStream();
+  }, LIVE_SYNC_SSE_RECONNECT_MS);
+}
+
+function queueLiveEventRefresh(flags = {}) {
+  if (flags.tutorials) {
+    liveEventQueuedTutorials = true;
+  }
+  if (flags.settings) {
+    liveEventQueuedSettings = true;
+  }
+  if (liveEventQueueTimer) {
+    return;
+  }
+  liveEventQueueTimer = window.setTimeout(async () => {
+    liveEventQueueTimer = null;
+    const needTutorials = liveEventQueuedTutorials;
+    const needSettings = liveEventQueuedSettings;
+    liveEventQueuedTutorials = false;
+    liveEventQueuedSettings = false;
+    if (needSettings) {
+      await refreshUserSettings();
+    }
+    if (needTutorials) {
+      await runLiveSyncTick({ force: true });
+    }
+  }, 120);
+}
+
+function syncLiveSyncLoopState() {
+  if (!state.currentUser || document.visibilityState === "hidden" || !canUseLiveSync()) {
+    stopLiveEventStream();
+    stopLiveSyncLoop();
+    return;
+  }
+  if (supportsLiveEventStream()) {
+    if (!liveEventReconnectTimer) {
+      startLiveEventStream();
+    }
+  }
+  if (!liveSyncIntervalId) {
+    startLiveSyncLoop();
+  }
+}
+
+async function runLiveSyncTick(options = {}) {
+  const force = Boolean(options && options.force);
+  if (!state.currentUser) {
+    return;
+  }
+  if (!force && (document.visibilityState === "hidden" || !canUseLiveSync())) {
+    return;
+  }
+  if (liveSyncInFlight) {
+    return;
+  }
+  liveSyncInFlight = true;
+  try {
+    const apiTutorials = await apiListTutorials();
+    const incomingSignature = buildTutorialsSignature(apiTutorials);
+    if (incomingSignature === state.tutorialsSignature && !liveSyncPendingApply) {
+      return;
+    }
+    if (isTutorialEditingInProgress()) {
+      liveSyncPendingApply = true;
+      schedulePendingLiveSyncFlush();
+      return;
+    }
+    const prevScrollY = window.scrollY;
+    const changed = await applyTutorialListFromServer(apiTutorials);
+    liveSyncPendingApply = false;
+    if (changed) {
+      syncStorageSettingsUi();
+      render();
+      if (state.page === "tutorial") {
+        window.scrollTo({ top: prevScrollY, behavior: "auto" });
+      }
+      setSyncStatus(`Actualizado en vivo · ${new Date().toLocaleTimeString("es-BO", { hour: "2-digit", minute: "2-digit" })}`);
+    }
+  } catch {
+    // En modo en vivo no interrumpimos al usuario con errores transitorios.
+  } finally {
+    liveSyncInFlight = false;
+  }
+}
+
 function checkAndNotifyReminders() {
   if (typeof Notification === "undefined" || Notification.permission !== "granted") {
     return;
@@ -2144,6 +4770,7 @@ function selectTutorial(id) {
   if (!id) {
     return;
   }
+  closeWindowMediaShells();
   void flushPendingAutosaves();
   state.selectedId = id;
   state.tutorialEditMode = false;
@@ -2157,9 +4784,10 @@ function openTutorialEditor(id) {
   }
   void flushPendingAutosaves();
   state.selectedId = id;
-  state.tutorialEditMode = true;
+  state.tutorialEditMode = false;
   closeSearchDialog();
   goToPage("tutorial");
+  openDialogForEdit(id);
 }
 
 function render() {
@@ -2170,6 +4798,7 @@ function render() {
   renderSavedViews();
   renderSmartCollections();
   renderSidebarTutorials();
+  syncStorageSettingsUi();
   renderCategoryOptions();
   renderSearchResults();
   syncPageVisibility();
@@ -2184,7 +4813,10 @@ function render() {
     if (state.tutorialEditMode) {
       renderTutorialEditorPanel();
     } else {
-      renderTutorialViewerPanel();
+      renderDetailPanel();
+    }
+    if (refs.dialog?.open && state.editingId) {
+      renderDialogMiniEditor(state.editingId);
     }
     return;
   }
@@ -2195,6 +4827,9 @@ function render() {
   renderView(filtered);
   renderReminderPanel();
   renderDuplicatePanel();
+  if (refs.dialog?.open && state.editingId) {
+    renderDialogMiniEditor(state.editingId);
+  }
 }
 
 function renderSearchResults() {
@@ -2290,7 +4925,14 @@ function renderTableLegacy(items) {
                       ${t.isFavorite ? "★" : "☆"}
                     </button>
                   </td>
-                  <td><button type="button" class="link-cell" data-open-id="${t.id}">${escapeHtml(t.title)}</button></td>
+                  <td>
+                    <button type="button" class="link-cell" data-open-id="${t.id}">
+                      <span class="title-with-sync">
+                        <span class="title-with-sync-text">${renderTutorialDisplayTitle(t)}</span>
+                        ${renderTutorialSyncHint(t)}
+                      </span>
+                    </button>
+                  </td>
                   <td>${formatType(t.type)}</td>
                   <td>${escapeHtml(t.category || "Sin categoria")}</td>
                   <td>
@@ -2474,7 +5116,174 @@ function renderTableSortHeader(label, sortBy) {
   `;
 }
 
+function getTutorialSyncHint(tutorial) {
+  if (!tutorial || typeof tutorial !== "object") {
+    return null;
+  }
+  const tutorialId = String(tutorial.id || "").trim();
+  if (!tutorialId) {
+    return null;
+  }
+  const summary = state.userSettings?.lastSyncSummary;
+  if (!summary || typeof summary !== "object" || Array.isArray(summary)) {
+    return null;
+  }
+  const tutorialCloud = summary.tutorialCloud;
+  if (!tutorialCloud || typeof tutorialCloud !== "object" || Array.isArray(tutorialCloud)) {
+    return null;
+  }
+  const raw = tutorialCloud[tutorialId];
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+
+  const stateValue = String(raw.state || "").trim().toLowerCase();
+  const pendingPeer = Math.max(0, Number(raw.pendingPeer || 0));
+  if (stateValue === "pending_peer") {
+    return {
+      tone: "pending",
+      iconHtml: "&harr;",
+      label:
+        pendingPeer > 1
+          ? `Pendiente entre dispositivos (${pendingPeer} archivos grandes)`
+          : "Pendiente entre dispositivos (archivo grande)",
+    };
+  }
+  if (stateValue === "error") {
+    return {
+      tone: "error",
+      iconHtml: "!",
+      label: "Sincronizacion con error en este tutorial",
+    };
+  }
+  return null;
+}
+
+function renderTutorialSyncHint(tutorial, variant = "inline") {
+  const hint = getTutorialSyncHint(tutorial);
+  if (!hint) {
+    return "";
+  }
+  const classes = ["tutorial-sync-hint", `is-${hint.tone}`];
+  if (variant === "sidebar") {
+    classes.push("is-sidebar");
+  } else if (variant === "detail") {
+    classes.push("is-detail");
+  }
+  const label = escapeAttribute(hint.label || "Estado de sincronizacion");
+  const iconHtml = typeof hint.iconHtml === "string" && hint.iconHtml ? hint.iconHtml : "&bull;";
+  return `<span class="${classes.join(" ")}" title="${label}" aria-label="${label}">${iconHtml}</span>`;
+}
+
+function shouldUseCompactLibraryTableLayout() {
+  if (typeof window === "undefined" || !window.matchMedia) {
+    return false;
+  }
+  return window.matchMedia("(max-width: 900px)").matches;
+}
+
+function renderCompactLibraryTable(items) {
+  if (!items.length) {
+    renderEmptyInto(refs.tableView);
+    return;
+  }
+
+  const showType = Boolean(state.visibleColumns.type);
+  const showCategory = Boolean(state.visibleColumns.category);
+  const showCollection = Boolean(state.visibleColumns.collection);
+  const showReviewDate = Boolean(state.visibleColumns.reviewDate);
+  const showUpdatedAt = Boolean(state.visibleColumns.updatedAt);
+
+  const sortButtons = [
+    { label: "Titulo", key: "title" },
+    ...(showType ? [{ label: "Tipo", key: "type" }] : []),
+    ...(showCategory ? [{ label: "Categoria", key: "category" }] : []),
+    ...(showCollection ? [{ label: "Coleccion", key: "collection" }] : []),
+    { label: "Prioridad", key: "priority" },
+    ...(showReviewDate ? [{ label: "Repaso", key: "reviewDate" }] : []),
+    ...(showUpdatedAt ? [{ label: "Actualizado", key: "updatedAt" }] : []),
+  ];
+
+  refs.tableView.innerHTML = `
+    <div class="library-mobile-list-wrap">
+      <div class="library-mobile-sort" role="toolbar" aria-label="Ordenar lista">
+        ${sortButtons
+          .map((button) => {
+            const isActive = state.sortBy === button.key;
+            const arrow = isActive ? (state.sortDirection === "asc" ? "↑" : "↓") : "";
+            return `
+              <button
+                type="button"
+                class="table-sort-btn library-mobile-sort-btn ${isActive ? "is-active" : ""}"
+                data-sort-by="${button.key}"
+                aria-label="Ordenar por ${button.label}"
+              >
+                <span>${button.label}</span>
+                ${arrow ? `<span class="table-sort-arrow">${arrow}</span>` : ""}
+              </button>
+            `;
+          })
+          .join("")}
+      </div>
+      <div class="library-mobile-list">
+        ${items
+          .map((t) => {
+            return `
+              <article class="library-mobile-card ${isTutorialSelected(t.id) ? "is-selected" : ""}">
+                <div class="library-mobile-card-top">
+                  <input
+                    type="checkbox"
+                    class="select-box"
+                    data-select-id="${t.id}"
+                    aria-label="Seleccionar ${escapeAttribute(t.title)}"
+                    ${isTutorialSelected(t.id) ? "checked" : ""}
+                  />
+                  <button type="button" class="favorite-btn ${t.isFavorite ? "is-on" : ""}" data-toggle-favorite="${t.id}" title="Favorito">
+                    ${t.isFavorite ? "&#9733;" : "&#9734;"}
+                  </button>
+                  <span class="library-mobile-card-spacer"></span>
+                  <details class="row-menu row-menu-card library-mobile-menu">
+                    <summary class="menu-trigger" aria-label="Opciones">...</summary>
+                    <div class="row-menu-panel">
+                      <div class="menu-actions">
+                        <button type="button" data-open-id="${t.id}">Abrir</button>
+                        <button type="button" data-edit-id="${t.id}">Editar</button>
+                        <button type="button" class="danger" data-delete-id="${t.id}">Eliminar</button>
+                      </div>
+                    </div>
+                  </details>
+                </div>
+                <button type="button" class="link-cell library-mobile-title" data-open-id="${t.id}">
+                  <span class="title-with-sync">
+                    <span class="title-with-sync-text">${renderTutorialDisplayTitle(t)}</span>
+                    ${renderTutorialSyncHint(t)}
+                  </span>
+                </button>
+                <div class="library-mobile-meta-row">
+                  ${showType ? `<span>${formatType(t.type)}</span>` : ""}
+                  ${showCategory ? `<span>${escapeHtml(t.category || "Sin categoria")}</span>` : ""}
+                  ${showCollection ? `<span>${escapeHtml(t.collection || "Sin coleccion")}</span>` : ""}
+                </div>
+                <div class="library-mobile-meta-row library-mobile-meta-row--secondary">
+                  <span>Prioridad: ${escapeHtml(t.priority || "-")}</span>
+                  ${showReviewDate ? `<span>Repaso: ${escapeHtml(t.reviewDate || "-")}</span>` : ""}
+                  ${showUpdatedAt ? `<span>Actualizado: ${escapeHtml(formatListDate(t.updatedAt || t.createdAt))}</span>` : ""}
+                </div>
+              </article>
+            `;
+          })
+          .join("")}
+      </div>
+    </div>
+  `;
+}
+
 function renderTable(items) {
+  if (shouldUseCompactLibraryTableLayout()) {
+    renderCompactLibraryTable(items);
+    return;
+  }
+
   if (!items.length) {
     renderEmptyInto(refs.tableView);
     return;
@@ -2529,7 +5338,14 @@ function renderTable(items) {
                       ${t.isFavorite ? "&#9733;" : "&#9734;"}
                     </button>
                   </td>
-                  <td><button type="button" class="link-cell" data-open-id="${t.id}">${escapeHtml(t.title)}</button></td>
+                  <td>
+                    <button type="button" class="link-cell" data-open-id="${t.id}">
+                      <span class="title-with-sync">
+                        <span class="title-with-sync-text">${renderTutorialDisplayTitle(t)}</span>
+                        ${renderTutorialSyncHint(t)}
+                      </span>
+                    </button>
+                  </td>
                   ${showType ? `<td>${formatType(t.type)}</td>` : ""}
                   ${showCategory ? `<td>${escapeHtml(t.category || "Sin categoria")}</td>` : ""}
                   ${showCollection ? `<td>${escapeHtml(t.collection || "Sin coleccion")}</td>` : ""}
@@ -2561,7 +5377,12 @@ function renderGallery(items) {
               <img src="${preview}" alt="${escapeHtml(t.title)}" class="card-preview" data-open-id="${t.id}" />
               <div class="card-content">
                 <button type="button" class="card-title-btn" data-open-id="${t.id}">
-                  <h3 class="card-title">${escapeHtml(t.title)}</h3>
+                  <h3 class="card-title">
+                    <span class="title-with-sync">
+                      <span class="title-with-sync-text">${renderTutorialDisplayTitle(t)}</span>
+                      ${renderTutorialSyncHint(t)}
+                    </span>
+                  </h3>
                 </button>
                 <p class="meta">${formatType(t.type)} · ${escapeHtml(t.category || "Sin categoria")}</p>
                 <p class="meta">${escapeHtml(t.collection || "Sin coleccion")} · ${escapeHtml(t.priority)}</p>
@@ -2730,14 +5551,31 @@ function renderTutorialViewerPanel() {
   const sourceValue = tutorial.url
     ? `<a href="${escapeAttribute(tutorial.url)}" target="_blank" rel="noreferrer">${sourceLabel}</a>`
     : sourceLabel;
+  const tutorialYoutubeId = tutorial.type === "video" ? extractYouTubeId(tutorial.url) : "";
+  const canJumpMainVideo = tutorial.type === "video" && !tutorialYoutubeId && isLikelyVideoUrl(tutorial.url);
   const tsHtml = tutorial.timestamps.length
-    ? `<ul class="timestamp-list">${tutorial.timestamps.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>`
+    ? `<ul class="timestamp-list">${tutorial.timestamps
+        .map((line) => {
+          const seconds = parseTimestampToSeconds(line);
+          if (!canJumpMainVideo || !Number.isFinite(seconds)) {
+            return `<li>${escapeHtml(line)}</li>`;
+          }
+          return `
+            <li>
+              <button type="button" class="ghost-btn timestamp-jump-btn" data-main-video-jump-seconds="${seconds}">
+                ${escapeHtml(line)}
+              </button>
+            </li>
+          `;
+        })
+        .join("")}</ul>`
     : `<p class="empty-side">Sin timestamps</p>`;
   const createdAt = new Date(tutorial.createdAt || Date.now()).toLocaleString("es-BO");
   const updatedAt = new Date(tutorial.updatedAt || tutorial.createdAt || Date.now()).toLocaleString("es-BO");
   const reviewValue = tutorial.reviewDate || "Sin fecha";
   const showStudyMeta = tutorial.type !== "image";
   const notesHtml = tutorial.notes ? nl2br(escapeHtml(tutorial.notes)) : `<span class="empty-side">Sin notas</span>`;
+  const primaryNotesSide = resolveTutorialNotesSide(tutorial);
   const extraBlocksHtml = renderExtraMediaReadOnlySection(tutorial);
 
   refs.detailPanel.innerHTML = `
@@ -2745,7 +5583,12 @@ function renderTutorialViewerPanel() {
       <header class="detail-header">
         <div class="detail-heading">
           <p class="detail-kicker">Pagina de tutorial</p>
-          <h2 class="detail-title">${escapeHtml(tutorial.title)}</h2>
+          <h2 class="detail-title">
+            <span class="title-with-sync">
+              <span class="title-with-sync-text">${renderTutorialDisplayTitle(tutorial)}</span>
+              ${renderTutorialSyncHint(tutorial, "detail")}
+            </span>
+          </h2>
           <div class="detail-badges">
             <span class="pill ${statusPillClass(tutorial.status)}">${escapeHtml(tutorial.status)}</span>
             <span class="tag">${formatType(tutorial.type)}</span>
@@ -2785,7 +5628,7 @@ function renderTutorialViewerPanel() {
         </article>
       </section>
 
-      <section class="detail-content-grid ${state.notesSide === "left" ? "is-notes-left" : ""}">
+      <section class="detail-content-grid ${primaryNotesSide === "left" ? "is-notes-left" : ""}">
         <div class="detail-media-area">
           <div class="media-frame">${renderDetailMedia(tutorial)}</div>
         </div>
@@ -2817,13 +5660,14 @@ function renderTutorialViewerPanel() {
 }
 
 function renderExtraMediaReadOnlySection(tutorial) {
-  const blocks = normalizeExtraContentBlocks(tutorial.extraContent);
+  const blocks = normalizeExtraContentBlocks(tutorial.extraContent, resolveTutorialNotesSide(tutorial));
+  const tutorialNotesSide = resolveTutorialNotesSide(tutorial);
   if (!blocks.length) {
     return "";
   }
 
   const blocksHtml = blocks
-    .map((block, index) => renderReadOnlyExtraBlock(tutorial.title, block, index + 1, blocks.length))
+    .map((block, index) => renderReadOnlyExtraBlock(tutorial.title, block, index + 1, blocks.length, tutorialNotesSide))
     .join("");
 
   return `
@@ -2838,7 +5682,8 @@ function renderExtraMediaReadOnlySection(tutorial) {
   `;
 }
 
-function renderReadOnlyExtraBlock(tutorialTitle, block, order, total) {
+function renderReadOnlyExtraBlock(tutorialTitle, block, order, total, notesSideFallback) {
+  const blockNotesSide = resolveBlockNotesSide(block, notesSideFallback);
   const noteHtml = block.note ? nl2br(escapeHtml(block.note)) : `<span class="empty-side">Sin notas</span>`;
   const typeLabel = block.type === "image" ? "Imagen" : block.type === "video" ? "Video" : "Texto";
   const orderMeta = total > 1 ? `<span class="meta">${order}/${total}</span>` : "";
@@ -2861,7 +5706,7 @@ function renderReadOnlyExtraBlock(tutorialTitle, block, order, total) {
     const youtubeId = extractYouTubeId(block.url);
     contentHtml = youtubeId
       ? `<iframe src="https://www.youtube.com/embed/${youtubeId}" title="${escapeAttribute(tutorialTitle)}" allowfullscreen loading="lazy"></iframe>`
-      : `<video controls src="${escapeAttribute(block.url)}"></video>`;
+      : `<video controls playsinline webkit-playsinline="true" preload="metadata" src="${escapeAttribute(block.url)}"></video>`;
   }
 
   const timestamps = Array.isArray(block.timestamps) ? block.timestamps : [];
@@ -2876,7 +5721,7 @@ function renderReadOnlyExtraBlock(tutorialTitle, block, order, total) {
       : "";
 
   return `
-    <article class="detail-extra-item media-module ${state.notesSide === "left" ? "is-notes-left" : ""}">
+    <article class="detail-extra-item media-module ${blockNotesSide === "left" ? "is-notes-left" : ""}">
       <div class="detail-extra-head media-module-head">
         <div class="media-module-title">
           <span class="tutorial-property-label">${typeLabel}</span>
@@ -2910,59 +5755,32 @@ function renderTutorialEditorPanel() {
     return;
   }
 
-  const blocks = normalizeExtraContentBlocks(tutorial.extraContent);
-  const modulesHtml = blocks.length
-    ? blocks.map((block, index) => renderEditorExtraModule(tutorial.id, block, index + 1, blocks.length)).join("")
-    : `<p class="meta">Aun no hay bloques adicionales.</p>`;
-  const miniMapHtml = renderEditorMiniMap(tutorial, blocks);
-
   refs.detailPanel.innerHTML = `
     <article class="detail-layout tutorial-editor-layout">
       <header class="detail-header">
         <div class="detail-heading">
           <p class="detail-kicker">Edicion de pagina</p>
           <h2 class="detail-title">${escapeHtml(tutorial.title)}</h2>
-          <p class="meta">Configura la estructura modular sin abrir el contenido final.</p>
+          <p class="meta">Organiza la pagina en miniatura y abre el editor flotante para ajustar propiedades.</p>
         </div>
         <div class="detail-actions">
-          <button type="button" data-toggle-notes-side="1">${state.notesSide === "left" ? "Notas a la derecha" : "Notas a la izquierda"}</button>
-          <button type="button" data-toggle-editor-mini-map="1">${state.editorMiniMapOpen ? "Ocultar miniatura" : "Ver miniatura"}</button>
+          <button type="button" data-open-properties-edit-id="${tutorial.id}">Opciones</button>
           <button type="button" data-close-tutorial-editor="1">Ver pagina</button>
         </div>
       </header>
 
-      <section class="detail-extra editor-modules">
-        <section class="detail-extra-media">
-          <h4>Bloque principal</h4>
-          ${renderEditorPrimaryModule(tutorial)}
-        </section>
-
-        <section class="detail-extra-media">
-          <h4>Bloques adicionales</h4>
-          <div class="detail-extra-media-list">
-            ${modulesHtml}
-          </div>
-          <div class="editor-add-row">
-            <button type="button" class="ghost-btn" data-add-content-id="${tutorial.id}" data-add-content-type="image">+ Imagen</button>
-            <button type="button" class="ghost-btn" data-add-content-id="${tutorial.id}" data-add-content-type="video">+ Video</button>
-            <button type="button" class="ghost-btn" data-editor-add-text-id="${tutorial.id}">+ Texto</button>
-          </div>
-        </section>
+      <section class="tutorial-editor-strip">
+        <div class="tutorial-editor-strip-copy">
+          <p class="tutorial-property-label">Resto de opciones de edicion</p>
+          <p class="meta">Se gestiona en la ventana flotante del editor.</p>
+        </div>
+        <button type="button" class="ghost-btn" data-open-properties-edit-id="${tutorial.id}">Abrir editor flotante</button>
       </section>
-
-      ${miniMapHtml}
     </article>
   `;
-
-  refs.detailPanel.querySelectorAll("[data-editor-primary-field], [data-editor-extra-field]").forEach((element) => {
-    if (element instanceof HTMLTextAreaElement) {
-      autoGrowTextarea(element, 88);
-    }
-  });
 }
 
 function renderEditorPrimaryModule(tutorial) {
-  const isVideo = tutorial.type === "video";
   const isImage = tutorial.type === "image";
   const isText = tutorial.type === "text";
   return `
@@ -2994,21 +5812,10 @@ function renderEditorPrimaryModule(tutorial) {
               <option value="manual" ${tutorial.source === "manual" ? "selected" : ""}>Manual</option>
             </select>
           </label>
-          ${isVideo ? `<label class="editor-inline-field"><span class="tutorial-property-label">URL video</span><input type="url" data-editor-primary-field="url" value="${escapeAttribute(tutorial.url || "")}" /></label>` : ""}
+          ${tutorial.type === "video" ? `<label class="editor-inline-field"><span class="tutorial-property-label">URL video</span><input type="url" data-editor-primary-field="url" value="${escapeAttribute(tutorial.url || "")}" /></label>` : ""}
           ${isImage ? `<label class="editor-inline-field"><span class="tutorial-property-label">URL imagen</span><input type="url" data-editor-primary-field="imageUrl" value="${escapeAttribute(tutorial.imageUrl || tutorial.url || "")}" /></label>` : ""}
-          ${isText ? `<label class="editor-inline-field"><span class="tutorial-property-label">Texto</span><textarea data-editor-primary-field="textContent" placeholder="Contenido principal">${escapeHtml(tutorial.textContent || "")}</textarea></label>` : ""}
-          ${
-            isVideo
-              ? `<label class="editor-inline-field"><span class="tutorial-property-label">Timestamps</span><textarea data-editor-primary-field="timestamps" placeholder="00:12 Intro&#10;02:40 Punto clave">${escapeHtml(
-                  (tutorial.timestamps || []).join("\n")
-                )}</textarea></label>`
-              : ""
-          }
+          ${isText ? `<label class="editor-inline-field"><span class="tutorial-property-label">Texto</span><textarea data-editor-primary-field="textContent" placeholder="Contenido principal">${escapeHtml(richStoredValueToPlainText(tutorial.textContent || ""))}</textarea></label>` : ""}
         </div>
-        <section class="media-module-note">
-          <h5>Notas</h5>
-          <textarea class="module-note-editor" data-editor-primary-field="notes" placeholder="Nota principal...">${escapeHtml(tutorial.notes || "")}</textarea>
-        </section>
       </div>
     </article>
   `;
@@ -3017,7 +5824,6 @@ function renderEditorPrimaryModule(tutorial) {
 function renderEditorExtraModule(tutorialId, block, order, total) {
   const typeLabel = block.type === "image" ? "Imagen" : block.type === "video" ? "Video" : "Texto";
   const orderMeta = total > 1 ? `<span class="meta">${order}/${total}</span>` : "";
-  const timestamps = Array.isArray(block.timestamps) ? block.timestamps : [];
   return `
     <article
       class="detail-extra-item media-module ${state.notesSide === "left" ? "is-notes-left" : ""}"
@@ -3063,7 +5869,7 @@ function renderEditorExtraModule(tutorialId, block, order, total) {
                     data-editor-extra-tutorial-id="${tutorialId}"
                     data-editor-extra-block-id="${block.id}"
                     placeholder="Contenido del bloque de texto"
-                  >${escapeHtml(block.text || "")}</textarea>
+                  >${escapeHtml(richStoredValueToPlainText(block.text || ""))}</textarea>
                 </label>
               `
               : `
@@ -3079,49 +5885,26 @@ function renderEditorExtraModule(tutorialId, block, order, total) {
                 </label>
               `
           }
-          ${
-            block.type === "video"
-              ? `
-                <label class="editor-inline-field">
-                  <span class="tutorial-property-label">Timestamps</span>
-                  <textarea
-                    data-editor-extra-field="timestamps"
-                    data-editor-extra-tutorial-id="${tutorialId}"
-                    data-editor-extra-block-id="${block.id}"
-                    placeholder="00:20 Intro&#10;03:40 Ejemplo"
-                  >${escapeHtml(timestamps.join("\n"))}</textarea>
-                </label>
-              `
-              : ""
-          }
         </div>
-        <section class="media-module-note">
-          <h5>Notas</h5>
-          <textarea
-            class="module-note-editor"
-            data-editor-extra-field="note"
-            data-editor-extra-tutorial-id="${tutorialId}"
-            data-editor-extra-block-id="${block.id}"
-            placeholder="Notas del bloque..."
-          >${escapeHtml(block.note || "")}</textarea>
-        </section>
       </div>
     </article>
   `;
 }
 
 function renderEditorMiniMap(tutorial, blocks) {
-  if (!state.editorMiniMapOpen) {
-    return "";
-  }
+  const primaryNotesSide = resolveTutorialNotesSide(tutorial);
+  const totalExtraBlocks = blocks.length;
   const cards = [
     renderEditorMiniMapCard({
       tutorialId: tutorial.id,
       blockId: "",
       order: 1,
       type: tutorial.type,
+      noteSide: primaryNotesSide,
       isPrimary: true,
       isDraggable: false,
+      canMoveUp: false,
+      canMoveDown: false,
     }),
     ...blocks.map((block, index) =>
       renderEditorMiniMapCard({
@@ -3129,41 +5912,161 @@ function renderEditorMiniMap(tutorial, blocks) {
         blockId: block.id,
         order: index + 2,
         type: block.type,
+        noteSide: resolveBlockNotesSide(block, primaryNotesSide),
         isPrimary: false,
         isDraggable: true,
+        canMoveUp: index > 0,
+        canMoveDown: index < totalExtraBlocks - 1,
       })
     ),
   ].join("");
 
   return `
-    <aside class="editor-mini-map-floating" aria-label="Miniatura de secciones">
-      <header class="editor-mini-map-head">
-        <h4>Miniatura</h4>
-      </header>
+    <section class="editor-mini-map-floating" aria-label="Miniatura de secciones">
       <div class="editor-mini-map-list">
         ${cards}
       </div>
-    </aside>
+    </section>
   `;
 }
 
-function renderEditorMiniMapCard({ tutorialId, blockId, order, type, isPrimary, isDraggable }) {
+function renderEditorMiniMapCard({
+  tutorialId,
+  blockId,
+  order,
+  type,
+  noteSide,
+  isPrimary,
+  isDraggable,
+  canMoveUp = false,
+  canMoveDown = false,
+}) {
+  const typeLabel = type === "image" ? "Imagen" : type === "video" ? "Video" : "Texto";
+  const moduleLabel = isPrimary ? "Principal" : "Modulo";
   const typeClass = type === "video" ? "is-video" : type === "image" ? "is-image" : "is-text";
+  const supportsNotesSide = type !== "text";
   const mediaClass = type === "text" ? "is-text" : "is-media";
   const draggableAttr = isDraggable ? `draggable="true"` : "";
   const dataAttrs = isDraggable ? `data-mini-module-id="${blockId}" data-mini-module-tutorial-id="${tutorialId}"` : "";
   return `
     <article class="mini-layout-card ${typeClass} ${isPrimary ? "is-primary" : ""}" ${draggableAttr} ${dataAttrs}>
       <div class="mini-layout-top">
-        <span class="mini-layout-index">${order}</span>
-        ${isDraggable ? `<button type="button" class="mini-layout-drag" data-mini-drag-handle="1" aria-label="Arrastrar">::</button>` : `<span class="mini-layout-lock">#</span>`}
+        <div class="mini-layout-top-meta">
+          <span class="mini-layout-index">${order}</span>
+          <span class="mini-layout-label">${moduleLabel}</span>
+          <span class="mini-layout-kind">${typeLabel}</span>
+        </div>
+        ${
+          isDraggable
+            ? `
+              <div class="mini-layout-actions">
+                <button
+                  type="button"
+                  class="mini-layout-move"
+                  data-mini-move-block-id="${blockId}"
+                  data-mini-move-tutorial-id="${tutorialId}"
+                  data-mini-move-direction="-1"
+                  aria-label="Mover arriba"
+                  title="Mover arriba"
+                  ${canMoveUp ? "" : "disabled"}
+                >↑</button>
+                <button
+                  type="button"
+                  class="mini-layout-move"
+                  data-mini-move-block-id="${blockId}"
+                  data-mini-move-tutorial-id="${tutorialId}"
+                  data-mini-move-direction="1"
+                  aria-label="Mover abajo"
+                  title="Mover abajo"
+                  ${canMoveDown ? "" : "disabled"}
+                >↓</button>
+                <button type="button" class="mini-layout-drag" data-mini-drag-handle="1" aria-label="Arrastrar">::</button>
+              </div>
+            `
+            : `<span class="mini-layout-lock">#</span>`
+        }
       </div>
-      <div class="mini-layout-shell ${state.notesSide === "left" ? "is-notes-left" : ""}">
+      <div class="mini-layout-shell ${supportsNotesSide && noteSide === "left" ? "is-notes-left" : ""} ${supportsNotesSide ? "" : "is-no-note"}">
         <span class="mini-layout-box mini-layout-media ${mediaClass}"></span>
-        <span class="mini-layout-box mini-layout-note"></span>
+        ${
+          supportsNotesSide
+            ? `
+              <span class="mini-layout-box mini-layout-note">
+                <button
+                  type="button"
+                  class="mini-layout-note-side ${noteSide === "left" ? "is-active" : ""}"
+                  data-mini-set-note-side="1"
+                  data-mini-note-side="left"
+                  data-mini-notes-tutorial-id="${tutorialId}"
+                  data-mini-notes-block-id="${escapeAttribute(blockId || "")}"
+                  aria-label="Poner nota a la izquierda"
+                  title="Nota a la izquierda"
+                >Izq</button>
+                <button
+                  type="button"
+                  class="mini-layout-note-side ${noteSide === "right" ? "is-active" : ""}"
+                  data-mini-set-note-side="1"
+                  data-mini-note-side="right"
+                  data-mini-notes-tutorial-id="${tutorialId}"
+                  data-mini-notes-block-id="${escapeAttribute(blockId || "")}"
+                  aria-label="Poner nota a la derecha"
+                  title="Nota a la derecha"
+                >Der</button>
+              </span>
+            `
+            : ""
+        }
       </div>
     </article>
   `;
+}
+
+function hideDialogMiniEditor() {
+  if (refs.dialogMiniEditor) {
+    refs.dialogMiniEditor.classList.add("hidden");
+  }
+  if (refs.dialogMiniEditorContent) {
+    refs.dialogMiniEditorContent.innerHTML = "";
+  }
+  if (refs.dialogMiniAddImage) {
+    delete refs.dialogMiniAddImage.dataset.addContentId;
+    delete refs.dialogMiniAddImage.dataset.addContentType;
+  }
+  if (refs.dialogMiniAddVideo) {
+    delete refs.dialogMiniAddVideo.dataset.addContentId;
+    delete refs.dialogMiniAddVideo.dataset.addContentType;
+  }
+  if (refs.dialogMiniAddText) {
+    delete refs.dialogMiniAddText.dataset.editorAddTextId;
+  }
+}
+
+function renderDialogMiniEditor(tutorialId) {
+  if (!refs.dialogMiniEditor || !refs.dialogMiniEditorContent) {
+    return;
+  }
+  const tutorial = state.tutorials.find((item) => item.id === tutorialId);
+  if (!tutorial || state.page !== "tutorial") {
+    hideDialogMiniEditor();
+    return;
+  }
+  refs.dialogMiniEditor.classList.remove("hidden");
+  refs.dialogMiniEditorContent.innerHTML = renderEditorMiniMap(
+    tutorial,
+    normalizeExtraContentBlocks(tutorial.extraContent, resolveTutorialNotesSide(tutorial))
+  );
+
+  if (refs.dialogMiniAddImage) {
+    refs.dialogMiniAddImage.dataset.addContentId = tutorialId;
+    refs.dialogMiniAddImage.dataset.addContentType = "image";
+  }
+  if (refs.dialogMiniAddVideo) {
+    refs.dialogMiniAddVideo.dataset.addContentId = tutorialId;
+    refs.dialogMiniAddVideo.dataset.addContentType = "video";
+  }
+  if (refs.dialogMiniAddText) {
+    refs.dialogMiniAddText.dataset.editorAddTextId = tutorialId;
+  }
 }
 
 function renderDetailPanelLegacy() {
@@ -3277,10 +6180,18 @@ function renderDetailPanel() {
   const createdAt = new Date(tutorial.createdAt || Date.now()).toLocaleString("es-BO");
   const updatedAt = new Date(tutorial.updatedAt || tutorial.createdAt || Date.now()).toLocaleString("es-BO");
   const reviewValue = tutorial.reviewDate || "Sin fecha";
-  const showStudyMeta = tutorial.type !== "image";
-  syncLiveTextComposerForTutorial(tutorial);
-  const extraMediaHtml = renderExtraMediaSection(tutorial);
-  const extraComposerHtml = renderExtraContentComposer(tutorial);
+  const showTimestamps = tutorial.type === "video";
+  const showReview = tutorial.type !== "image" && tutorial.type !== "text";
+  const showNotes = tutorial.type !== "text";
+  const showSide = showNotes || showTimestamps || showReview;
+  const tutorialNotesSide = resolveTutorialNotesSide(tutorial);
+  const notesCollapseEnabled = shouldLockNotesHeight();
+  const primaryNotesCollapsed = notesCollapseEnabled ? isPrimaryNotesCollapsed(tutorial.id) : false;
+  const canCollapsePrimaryNotes = notesCollapseEnabled && showNotes && !showTimestamps && !showReview;
+  const collapsePrimaryToCenter = canCollapsePrimaryNotes && primaryNotesCollapsed;
+  const effectiveShowSide = showSide && !collapsePrimaryToCenter;
+  const primaryNotesPreviewHtml = buildMarkdownPreviewHtml(tutorial.notes || "");
+  const extraMediaHtml = renderExtraMediaSection(tutorial, tutorialNotesSide);
 
   refs.detailPanel.innerHTML = `
     <article class="detail-layout">
@@ -3296,7 +6207,6 @@ function renderDetailPanel() {
           </div>
         </div>
         <div class="detail-actions">
-          <button type="button" data-toggle-notes-side="1">${state.notesSide === "left" ? "Notas a la derecha" : "Notas a la izquierda"}</button>
           <button
             type="button"
             class="favorite-btn ${tutorial.isFavorite ? "is-on" : ""}"
@@ -3328,41 +6238,103 @@ function renderDetailPanel() {
         </article>
       </section>
 
-      <section class="detail-content-grid ${state.notesSide === "left" ? "is-notes-left" : ""}">
+      <section class="detail-content-grid ${tutorialNotesSide === "left" ? "is-notes-left" : ""} ${!effectiveShowSide ? "is-single-column" : ""} ${collapsePrimaryToCenter ? "is-primary-notes-collapsed" : ""}">
         <div class="detail-media-area">
           <div class="media-frame">${renderDetailMedia(tutorial)}</div>
-        </div>
-        <aside class="detail-side ${showStudyMeta ? "" : "detail-side--notes-only"}">
-          <section class="detail-side-card">
-            <h4>Notas</h4>
-            <div class="detail-note-body">
-              <textarea
-                class="detail-note-editor"
-                data-notes-editor-id="${tutorial.id}"
-                placeholder="Escribe notas para este tutorial..."
-              >${escapeHtml(tutorial.notes || "")}</textarea>
-            </div>
-          </section>
           ${
-            showStudyMeta
+            collapsePrimaryToCenter
               ? `
-                <section class="detail-side-card">
-                  <h4>Timestamps</h4>
-                  ${tsHtml}
-                </section>
-                <section class="detail-side-card">
-                  <h4>Repaso</h4>
-                  <p class="detail-review">${escapeHtml(reviewValue)}</p>
-                </section>
+                <div class="media-inline-tools">
+                  <button
+                    type="button"
+                    class="notes-collapse-btn"
+                    data-toggle-notes-collapse="1"
+                    data-toggle-notes-tutorial-id="${tutorial.id}"
+                    aria-expanded="false"
+                  >
+                    Mostrar notas
+                  </button>
+                </div>
               `
               : ""
           }
-        </aside>
+        </div>
+        ${
+          effectiveShowSide
+            ? `
+              <aside class="detail-side ${showNotes && !showTimestamps && !showReview ? "detail-side--notes-only" : ""}">
+                ${
+                  showNotes
+                    ? `
+                      <section class="detail-side-card ${primaryNotesCollapsed ? "is-collapsed" : ""}">
+                        <div class="notes-card-head">
+                          <h4>Notas</h4>
+                          ${
+                            canCollapsePrimaryNotes
+                              ? `
+                                <button
+                                  type="button"
+                                  class="notes-collapse-btn"
+                                  data-toggle-notes-collapse="1"
+                                  data-toggle-notes-tutorial-id="${tutorial.id}"
+                                  aria-expanded="${primaryNotesCollapsed ? "false" : "true"}"
+                                >
+                                  ${primaryNotesCollapsed ? "Mostrar" : "Ocultar"}
+                                </button>
+                              `
+                              : ""
+                          }
+                        </div>
+                        <div class="detail-note-body" data-primary-notes-wrap-id="${tutorial.id}">
+                          <div
+                            class="markdown-body detail-note-markdown-view ${primaryNotesCollapsed ? "hidden" : ""}"
+                            data-notes-markdown-preview-id="${tutorial.id}"
+                            data-rich-editable="1"
+                            data-rich-notes-id="${tutorial.id}"
+                            data-placeholder="Escribe notas para este tutorial..."
+                            contenteditable="true"
+                            spellcheck="true"
+                            tabindex="0"
+                          >${primaryNotesPreviewHtml}</div>
+                          <textarea
+                            class="detail-note-editor hidden"
+                            data-notes-editor-id="${tutorial.id}"
+                            data-markdown-enabled="1"
+                            placeholder="Escribe notas para este tutorial..."
+                          >${escapeHtml(tutorial.notes || "")}</textarea>
+                        </div>
+                      </section>
+                    `
+                    : ""
+                }
+                ${
+                  showTimestamps
+                    ? `
+                      <section class="detail-side-card">
+                        <h4>Timestamps</h4>
+                        ${tsHtml}
+                      </section>
+                    `
+                    : ""
+                }
+                ${
+                  showReview
+                    ? `
+                      <section class="detail-side-card">
+                        <h4>Repaso</h4>
+                        <p class="detail-review">${escapeHtml(reviewValue)}</p>
+                      </section>
+                    `
+                    : ""
+                }
+              </aside>
+            `
+            : ""
+        }
       </section>
 
       <section class="detail-extra">
         ${extraMediaHtml}
-        ${extraComposerHtml}
         <details class="detail-add-menu">
           <summary class="detail-add-trigger" aria-label="Agregar contenido">+</summary>
           <div class="row-menu-panel detail-add-panel">
@@ -3390,12 +6362,20 @@ function renderDetailPanel() {
     );
   }
   syncDetailEditorsLayout(tutorial.id);
+  window.requestAnimationFrame(() => {
+    if (state.page === "tutorial" && state.selectedId === tutorial.id) {
+      syncDetailEditorsLayout(tutorial.id);
+    }
+  });
 }
 
 function syncDetailEditorsLayout(tutorialId) {
   if (!tutorialId) {
     return;
   }
+  syncVideoOrientationClasses(refs.detailPanel);
+  syncImageOrientationClasses(refs.detailPanel);
+  syncPortraitAlignmentClasses();
   const tutorial = state.tutorials.find((item) => item.id === tutorialId);
   const noteEditor = refs.detailPanel.querySelector(`[data-notes-editor-id="${tutorialId}"]`);
   if (noteEditor instanceof HTMLTextAreaElement) {
@@ -3413,7 +6393,190 @@ function syncDetailEditorsLayout(tutorialId) {
   if (liveTextArea instanceof HTMLTextAreaElement) {
     autoGrowTextarea(liveTextArea, 120);
   }
+  refs.detailPanel.querySelectorAll('[data-extra-block-field="text"]').forEach((element) => {
+    if (element instanceof HTMLTextAreaElement) {
+      autoGrowTextarea(element, 120);
+    }
+  });
   syncExtraModuleNotesHeights();
+}
+
+function resolveVideoOrientation(videoElement) {
+  if (!(videoElement instanceof HTMLVideoElement)) {
+    return "";
+  }
+  const width = Number(videoElement.videoWidth || 0);
+  const height = Number(videoElement.videoHeight || 0);
+  if (!width || !height) {
+    return "";
+  }
+  const ratio = width / height;
+  if (ratio < 0.92) {
+    return "portrait";
+  }
+  if (ratio > 1.08) {
+    return "landscape";
+  }
+  return "square";
+}
+
+function applyVideoOrientationClass(videoElement) {
+  if (!(videoElement instanceof HTMLVideoElement)) {
+    return;
+  }
+  const orientation = resolveVideoOrientation(videoElement);
+  if (!orientation) {
+    videoElement.removeAttribute("data-video-orientation");
+    return;
+  }
+  videoElement.setAttribute("data-video-orientation", orientation);
+}
+
+function resolveImageOrientation(imageElement) {
+  if (!(imageElement instanceof HTMLImageElement)) {
+    return "";
+  }
+  const width = Number(imageElement.naturalWidth) || 0;
+  const height = Number(imageElement.naturalHeight) || 0;
+  if (width <= 0 || height <= 0) {
+    return "";
+  }
+  if (width > height * 1.05) {
+    return "landscape";
+  }
+  if (height > width * 1.05) {
+    return "portrait";
+  }
+  return "square";
+}
+
+function applyImageOrientationClass(imageElement) {
+  if (!(imageElement instanceof HTMLImageElement)) {
+    return;
+  }
+  const orientation = resolveImageOrientation(imageElement);
+  if (!orientation) {
+    imageElement.removeAttribute("data-image-orientation");
+    return;
+  }
+  imageElement.setAttribute("data-image-orientation", orientation);
+}
+
+function bindImageOrientation(imageElement) {
+  if (!(imageElement instanceof HTMLImageElement)) {
+    return;
+  }
+  applyImageOrientationClass(imageElement);
+  if (imageElement.dataset.orientationBound === "1") {
+    return;
+  }
+  imageElement.dataset.orientationBound = "1";
+  imageElement.addEventListener(
+    "load",
+    () => {
+      applyImageOrientationClass(imageElement);
+      if (state.selectedId) {
+        syncDetailEditorsLayout(state.selectedId);
+      }
+    },
+    { once: true }
+  );
+}
+
+function bindVideoOrientation(videoElement) {
+  if (!(videoElement instanceof HTMLVideoElement)) {
+    return;
+  }
+  applyVideoOrientationClass(videoElement);
+  if (videoElement.dataset.orientationBound === "1") {
+    return;
+  }
+  videoElement.dataset.orientationBound = "1";
+  videoElement.addEventListener("loadedmetadata", () => {
+    applyVideoOrientationClass(videoElement);
+    if (state.selectedId) {
+      syncDetailEditorsLayout(state.selectedId);
+    }
+  });
+}
+
+function syncVideoOrientationClasses(scope = refs.detailPanel) {
+  if (!(scope instanceof HTMLElement)) {
+    return;
+  }
+  scope.querySelectorAll("video").forEach((videoNode) => {
+    if (videoNode instanceof HTMLVideoElement) {
+      bindVideoOrientation(videoNode);
+    }
+  });
+}
+
+function syncImageOrientationClasses(scope = refs.detailPanel) {
+  if (!(scope instanceof HTMLElement)) {
+    return;
+  }
+  scope.querySelectorAll("img").forEach((imageNode) => {
+    if (imageNode instanceof HTMLImageElement) {
+      bindImageOrientation(imageNode);
+    }
+  });
+}
+
+function isPortraitMediaContainer(container) {
+  if (!(container instanceof HTMLElement)) {
+    return false;
+  }
+  const portraitImage = container.querySelector('img[data-image-orientation="portrait"]');
+  if (portraitImage instanceof HTMLImageElement) {
+    return true;
+  }
+  const imageNode = container.querySelector("img");
+  if (imageNode instanceof HTMLImageElement) {
+    const imageOrientation = resolveImageOrientation(imageNode);
+    if (imageOrientation === "portrait") {
+      return true;
+    }
+  }
+  const portraitVideo = container.querySelector('video[data-video-orientation="portrait"]');
+  if (portraitVideo instanceof HTMLVideoElement) {
+    return true;
+  }
+  const videoNode = container.querySelector("video");
+  if (videoNode instanceof HTMLVideoElement) {
+    const videoOrientation = resolveVideoOrientation(videoNode);
+    if (videoOrientation === "portrait") {
+      return true;
+    }
+  }
+  const portraitEmbed = container.querySelector(".window-media-shell.is-portrait-embed");
+  if (portraitEmbed instanceof HTMLElement) {
+    return true;
+  }
+
+  const measurable = container.querySelector("img, video, iframe");
+  if (measurable instanceof HTMLElement) {
+    const rect = measurable.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0 && rect.height > rect.width * 1.05) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function syncPortraitAlignmentClasses() {
+  const detailGrid = refs.detailPanel.querySelector(".detail-content-grid");
+  if (detailGrid instanceof HTMLElement) {
+    const mediaArea = detailGrid.querySelector(".detail-media-area");
+    detailGrid.classList.toggle("is-primary-portrait-media", isPortraitMediaContainer(mediaArea));
+  }
+
+  refs.detailPanel.querySelectorAll(".media-module").forEach((module) => {
+    if (!(module instanceof HTMLElement)) {
+      return;
+    }
+    const mediaArea = module.querySelector(".media-module-media");
+    module.classList.toggle("is-media-portrait", isPortraitMediaContainer(mediaArea));
+  });
 }
 
 function clampEditorHeight(editor, targetPx, minPx = 120) {
@@ -3430,16 +6593,85 @@ function clampEditorHeight(editor, targetPx, minPx = 120) {
   editor.style.overflowY = "auto";
 }
 
+function parseCssPixels(value) {
+  const numeric = Number.parseFloat(String(value || "0"));
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function shouldLockNotesHeight() {
+  if (typeof window === "undefined" || !window.matchMedia) {
+    return true;
+  }
+  return window.matchMedia("(min-width: 900px)").matches;
+}
+
 function syncPrimaryNotesHeight(noteEditor) {
   if (!(noteEditor instanceof HTMLTextAreaElement) || state.page !== "tutorial") {
     return;
   }
-  const tutorial = state.tutorials.find((item) => item.id === state.selectedId);
+  const tutorialId = noteEditor.dataset.notesEditorId || state.selectedId;
+  const tutorial = state.tutorials.find((item) => item.id === tutorialId);
   if (!tutorial || tutorial.type === "text") {
     noteEditor.style.removeProperty("height");
     noteEditor.style.removeProperty("max-height");
     noteEditor.style.removeProperty("min-height");
     noteEditor.style.overflowY = "hidden";
+    const detailSide = noteEditor.closest(".detail-side");
+    if (detailSide instanceof HTMLElement) {
+      detailSide.style.removeProperty("max-height");
+      detailSide.style.removeProperty("overflow-y");
+      detailSide.style.removeProperty("height");
+    }
+    const noteCard = noteEditor.closest(".detail-side-card");
+    if (noteCard instanceof HTMLElement) {
+      noteCard.style.removeProperty("height");
+      noteCard.style.removeProperty("max-height");
+      noteCard.style.removeProperty("min-height");
+      noteCard.style.removeProperty("overflow");
+    }
+    const noteBody = noteEditor.closest(".detail-note-body");
+    if (noteBody instanceof HTMLElement) {
+      noteBody.style.removeProperty("height");
+      noteBody.style.removeProperty("max-height");
+      noteBody.style.removeProperty("min-height");
+      noteBody.style.removeProperty("overflow");
+    }
+    return;
+  }
+
+  if (!shouldLockNotesHeight()) {
+    noteEditor.style.removeProperty("height");
+    noteEditor.style.removeProperty("max-height");
+    noteEditor.style.removeProperty("min-height");
+    noteEditor.style.overflowY = "hidden";
+    autoGrowTextarea(noteEditor, 120);
+    const detailSide = noteEditor.closest(".detail-side");
+    if (detailSide instanceof HTMLElement) {
+      detailSide.style.removeProperty("max-height");
+      detailSide.style.removeProperty("overflow-y");
+      detailSide.style.removeProperty("height");
+    }
+    const noteCard = noteEditor.closest(".detail-side-card");
+    if (noteCard instanceof HTMLElement) {
+      noteCard.style.removeProperty("height");
+      noteCard.style.removeProperty("max-height");
+      noteCard.style.removeProperty("min-height");
+      noteCard.style.removeProperty("overflow");
+    }
+    const noteBody = noteEditor.closest(".detail-note-body");
+    if (noteBody instanceof HTMLElement) {
+      noteBody.style.removeProperty("height");
+      noteBody.style.removeProperty("max-height");
+      noteBody.style.removeProperty("min-height");
+      noteBody.style.removeProperty("overflow");
+    }
+    const noteView = refs.detailPanel.querySelector(`[data-notes-markdown-preview-id="${tutorialId}"]`);
+    if (noteView instanceof HTMLElement) {
+      noteView.style.removeProperty("height");
+      noteView.style.removeProperty("max-height");
+      noteView.style.removeProperty("min-height");
+      noteView.style.removeProperty("overflow-y");
+    }
     return;
   }
 
@@ -3449,12 +6681,102 @@ function syncPrimaryNotesHeight(noteEditor) {
   }
 
   const noteCard = noteEditor.closest(".detail-side-card");
-  const noteHeading = noteCard?.querySelector("h4");
-  const headingHeight = noteHeading instanceof HTMLElement ? noteHeading.getBoundingClientRect().height + 6 : 0;
-  clampEditorHeight(noteEditor, mediaFrame.getBoundingClientRect().height - headingHeight, 140);
+  const detailSide = noteEditor.closest(".detail-side");
+  const noteBody = noteEditor.closest(".detail-note-body");
+  if (!(noteCard instanceof HTMLElement) || !(detailSide instanceof HTMLElement)) {
+    return;
+  }
+  if (noteCard.classList.contains("is-collapsed")) {
+    noteEditor.style.removeProperty("height");
+    noteEditor.style.removeProperty("max-height");
+    noteEditor.style.removeProperty("min-height");
+    noteEditor.style.overflowY = "hidden";
+    noteCard.style.removeProperty("height");
+    noteCard.style.removeProperty("max-height");
+    noteCard.style.removeProperty("min-height");
+    noteCard.style.removeProperty("overflow");
+    if (noteBody instanceof HTMLElement) {
+      noteBody.style.removeProperty("height");
+      noteBody.style.removeProperty("max-height");
+      noteBody.style.removeProperty("min-height");
+      noteBody.style.removeProperty("overflow");
+    }
+    return;
+  }
+  const noteHeading = noteCard?.querySelector(".notes-card-head");
+  const noteView = noteCard?.querySelector(".detail-note-markdown-view");
+  const detailSideComputed = window.getComputedStyle(detailSide);
+  const noteCardComputed = window.getComputedStyle(noteCard);
+  const sideGap = parseCssPixels(detailSideComputed.rowGap || detailSideComputed.gap);
+  const noteCardGap = parseCssPixels(noteCardComputed.rowGap || noteCardComputed.gap);
+  const headingHeight = noteHeading instanceof HTMLElement ? noteHeading.getBoundingClientRect().height : 0;
+  const mediaHeight = mediaFrame.getBoundingClientRect().height;
+  const sideCards = Array.from(detailSide.querySelectorAll(".detail-side-card"));
+  const otherCardsHeight = sideCards
+    .filter((card) => card !== noteCard)
+    .reduce((acc, card) => acc + card.getBoundingClientRect().height, 0);
+  const sideGapsTotal = Math.max(0, sideCards.length - 1) * sideGap;
+  const noteCardHeight = Math.max(140, mediaHeight - otherCardsHeight - sideGapsTotal);
+  const cardBodyPadding = parseCssPixels(noteCardComputed.paddingTop) + parseCssPixels(noteCardComputed.paddingBottom);
+  const availableHeight = Math.max(140, noteCardHeight - headingHeight - cardBodyPadding - noteCardGap);
+
+  detailSide.style.height = `${Math.max(140, mediaHeight)}px`;
+  detailSide.style.maxHeight = `${Math.max(140, mediaHeight)}px`;
+  detailSide.style.overflowY = sideCards.length > 1 ? "auto" : "hidden";
+  noteCard.style.height = `${noteCardHeight}px`;
+  noteCard.style.maxHeight = `${noteCardHeight}px`;
+  noteCard.style.minHeight = `${noteCardHeight}px`;
+  noteCard.style.display = "flex";
+  noteCard.style.flexDirection = "column";
+  noteCard.style.overflow = "hidden";
+  if (noteBody instanceof HTMLElement) {
+    noteBody.style.height = `${availableHeight}px`;
+    noteBody.style.maxHeight = `${availableHeight}px`;
+    noteBody.style.minHeight = `${availableHeight}px`;
+    noteBody.style.overflow = "hidden";
+  }
+
+  clampEditorHeight(noteEditor, availableHeight, 140);
+  if (noteView instanceof HTMLElement) {
+    noteView.style.maxHeight = `${availableHeight}px`;
+    noteView.style.minHeight = `${availableHeight}px`;
+    noteView.style.height = `${availableHeight}px`;
+    noteView.style.overflowY = "auto";
+  }
 }
 
 function syncExtraModuleNotesHeights() {
+  if (!shouldLockNotesHeight()) {
+    refs.detailPanel.querySelectorAll(".media-module-note").forEach((noteColumn) => {
+      if (!(noteColumn instanceof HTMLElement)) {
+        return;
+      }
+      noteColumn.style.removeProperty("height");
+      noteColumn.style.removeProperty("max-height");
+      noteColumn.style.removeProperty("overflow");
+    });
+    refs.detailPanel.querySelectorAll("[data-extra-block-note-id]").forEach((noteEditor) => {
+      if (!(noteEditor instanceof HTMLTextAreaElement)) {
+        return;
+      }
+      noteEditor.style.removeProperty("height");
+      noteEditor.style.removeProperty("max-height");
+      noteEditor.style.removeProperty("min-height");
+      noteEditor.style.overflowY = "hidden";
+      autoGrowTextarea(noteEditor, 92);
+    });
+    refs.detailPanel.querySelectorAll(".extra-note-markdown-view").forEach((noteView) => {
+      if (!(noteView instanceof HTMLElement)) {
+        return;
+      }
+      noteView.style.removeProperty("height");
+      noteView.style.removeProperty("max-height");
+      noteView.style.removeProperty("min-height");
+      noteView.style.removeProperty("overflow-y");
+    });
+    return;
+  }
+
   const modules = refs.detailPanel.querySelectorAll(".media-module");
   if (!modules.length) {
     return;
@@ -3468,9 +6790,39 @@ function syncExtraModuleNotesHeights() {
     if (!(noteEditor instanceof HTMLTextAreaElement) || !(mediaColumn instanceof HTMLElement)) {
       return;
     }
-    const heading = module.querySelector(".media-module-note h5");
-    const headingHeight = heading instanceof HTMLElement ? heading.getBoundingClientRect().height + 6 : 0;
-    clampEditorHeight(noteEditor, mediaColumn.getBoundingClientRect().height - headingHeight, 92);
+    const noteColumn = module.querySelector(".media-module-note");
+    if (!(noteColumn instanceof HTMLElement)) {
+      return;
+    }
+    if (noteColumn.classList.contains("is-collapsed")) {
+      noteColumn.style.removeProperty("height");
+      noteColumn.style.removeProperty("max-height");
+      noteColumn.style.removeProperty("overflow");
+      noteEditor.style.removeProperty("height");
+      noteEditor.style.removeProperty("max-height");
+      noteEditor.style.removeProperty("min-height");
+      noteEditor.style.overflowY = "hidden";
+      return;
+    }
+    const heading = module.querySelector(".media-module-note .notes-card-head");
+    const noteView = module.querySelector(".extra-note-markdown-view");
+    const noteColumnComputed = window.getComputedStyle(noteColumn);
+    const noteColumnGap = parseCssPixels(noteColumnComputed.rowGap || noteColumnComputed.gap);
+    const noteColumnPadding =
+      parseCssPixels(noteColumnComputed.paddingTop) + parseCssPixels(noteColumnComputed.paddingBottom);
+    const headingHeight = heading instanceof HTMLElement ? heading.getBoundingClientRect().height : 0;
+    const mediaHeight = mediaColumn.getBoundingClientRect().height;
+    const availableHeight = Math.max(92, mediaHeight - headingHeight - noteColumnGap - noteColumnPadding);
+    noteColumn.style.height = `${Math.max(92, mediaHeight)}px`;
+    noteColumn.style.maxHeight = `${Math.max(92, mediaHeight)}px`;
+    noteColumn.style.overflow = "hidden";
+    clampEditorHeight(noteEditor, availableHeight, 92);
+    if (noteView instanceof HTMLElement) {
+      noteView.style.maxHeight = `${availableHeight}px`;
+      noteView.style.minHeight = `${availableHeight}px`;
+      noteView.style.height = `${availableHeight}px`;
+      noteView.style.overflowY = "auto";
+    }
 
     const image = mediaColumn.querySelector("img");
     if (image instanceof HTMLImageElement && !image.complete && image.dataset.layoutBound !== "1") {
@@ -3507,7 +6859,7 @@ function syncLiveTextComposerForTutorial(tutorial) {
   if (!tutorial) {
     return;
   }
-  const blocks = normalizeExtraContentBlocks(tutorial.extraContent);
+  const blocks = normalizeExtraContentBlocks(tutorial.extraContent, resolveTutorialNotesSide(tutorial));
   const textBlocks = blocks.filter((block) => block.type === "text");
   const draft = loadLiveTextDraft(tutorial.id);
 
@@ -3542,7 +6894,26 @@ function syncLiveTextComposerForTutorial(tutorial) {
 
 function renderDetailMedia(tutorial) {
   if (tutorial.type === "text") {
-    return `<pre>${escapeHtml(tutorial.textContent || tutorial.notes || "Sin contenido de texto.")}</pre>`;
+    const primaryTextHtml = buildMarkdownPreviewHtml(tutorial.textContent || "");
+    return `
+      <div class="detail-text-wrap" data-primary-text-wrap-id="${tutorial.id}">
+        <div
+          class="markdown-body detail-main-text-editor"
+          data-rich-editable="1"
+          data-rich-primary-text-id="${tutorial.id}"
+          data-placeholder="Insertar texto"
+          contenteditable="true"
+          spellcheck="true"
+          tabindex="0"
+        >${primaryTextHtml}</div>
+        <textarea
+          class="detail-composer-text-input hidden"
+          data-primary-text-editor-id="${tutorial.id}"
+          data-markdown-enabled="1"
+          placeholder="Insertar texto"
+        >${escapeHtml(tutorial.textContent || "")}</textarea>
+      </div>
+    `;
   }
   if (tutorial.type === "image") {
     const imageUrl = tutorial.imageUrl || tutorial.url;
@@ -3550,36 +6921,103 @@ function renderDetailMedia(tutorial) {
   }
   const youtubeId = extractYouTubeId(tutorial.url);
   if (youtubeId) {
-    return `<iframe src="https://www.youtube.com/embed/${youtubeId}" title="${escapeAttribute(
-      tutorial.title
-    )}" allowfullscreen loading="lazy"></iframe>`;
+    const shellClass = `window-media-shell${isLikelyPortraitEmbedUrl(tutorial.url) ? " is-portrait-embed" : ""}`;
+    return `
+      <div class="${shellClass}" data-window-media-shell>
+        <button type="button" class="window-media-toggle" data-toggle-window-media aria-expanded="false">Expandir ventana</button>
+        <iframe
+          src="https://www.youtube.com/embed/${youtubeId}"
+          title="${escapeAttribute(tutorial.title)}"
+          allowfullscreen
+          loading="lazy"
+        ></iframe>
+      </div>
+    `;
   }
   if (isLikelyVideoUrl(tutorial.url)) {
-    return `<video controls src="${escapeAttribute(tutorial.url)}"></video>`;
+    return `
+      <div class="window-media-shell" data-window-media-shell>
+        <button type="button" class="window-media-toggle" data-toggle-window-media aria-expanded="false">Expandir ventana</button>
+          <video controls playsinline webkit-playsinline="true" preload="metadata" data-primary-video="1" src="${escapeAttribute(tutorial.url)}"></video>
+      </div>
+    `;
   }
   return tutorial.url
     ? `<p><a href="${escapeAttribute(tutorial.url)}" target="_blank" rel="noreferrer">Abrir video</a></p>`
     : "<p class='empty-side'>No hay video para mostrar.</p>";
 }
 
-function renderExtraMediaSection(tutorial) {
-  const blocks = normalizeExtraContentBlocks(tutorial.extraContent);
-  const mediaBlocks = blocks.filter((block) => block.type === "image" || block.type === "video");
-  if (!mediaBlocks.length) {
+function renderExtraMediaSection(tutorial, notesSideFallback = resolveTutorialNotesSide(tutorial)) {
+  const blocks = normalizeExtraContentBlocks(tutorial.extraContent, notesSideFallback);
+  if (!blocks.length) {
     return "";
   }
 
-  const modulesHtml = mediaBlocks
-    .map((block, index) => renderExtraMediaModuleV2(tutorial.id, tutorial.title, block, index + 1, mediaBlocks.length))
+  const modulesHtml = blocks
+    .map((block, index) =>
+      block.type === "text"
+        ? renderExtraTextModuleV2(tutorial.id, block, index + 1, blocks.length, notesSideFallback)
+        : renderExtraMediaModuleV2(tutorial.id, tutorial.title, block, index + 1, blocks.length, notesSideFallback)
+    )
     .join("");
 
   return `
     <section class="detail-extra-media">
-      <h4>Contenido agregado</h4>
       <div class="detail-extra-media-list">
         ${modulesHtml}
       </div>
     </section>
+  `;
+}
+
+function renderExtraTextModuleV2(tutorialId, block, order, total, notesSideFallback = "right") {
+  const textPreviewHtml = buildMarkdownPreviewHtml(block.text || "");
+  return `
+    <article
+      class="detail-extra-item media-module media-module-text-only"
+      data-extra-text-module-id="${block.id}"
+      data-extra-text-module-tutorial-id="${tutorialId}"
+    >
+      <div class="detail-extra-head media-module-head media-module-head--compact">
+        ${renderExtraBlockMenuV2(tutorialId, block.id, order, total)}
+      </div>
+      <div class="media-module-media">
+        <label class="editor-inline-field">
+          <input
+            type="text"
+            class="extra-text-title-input"
+            data-extra-block-field="caption"
+            data-extra-block-id="${block.id}"
+            data-extra-block-tutorial-id="${tutorialId}"
+            value="${escapeAttribute(block.caption || "")}"
+            placeholder="Insertar titulo"
+          />
+        </label>
+        <div class="editor-inline-field extra-text-body" data-extra-text-wrap-id="${block.id}">
+          <div
+            class="markdown-body extra-markdown-preview"
+            data-extra-markdown-preview-id="${block.id}"
+            data-rich-editable="1"
+            data-rich-extra-text-id="${block.id}"
+            data-rich-extra-text-tutorial-id="${tutorialId}"
+            data-placeholder="Insertar texto"
+            contenteditable="true"
+            spellcheck="true"
+            tabindex="0"
+          >
+            ${textPreviewHtml}
+          </div>
+          <textarea
+            class="detail-composer-text-input hidden"
+            data-extra-block-field="text"
+            data-extra-block-id="${block.id}"
+            data-extra-block-tutorial-id="${tutorialId}"
+            data-markdown-enabled="1"
+            placeholder="Insertar texto"
+          >${escapeHtml(block.text || "")}</textarea>
+        </div>
+      </div>
+    </article>
   `;
 }
 
@@ -3605,7 +7043,7 @@ function renderExtraMediaModule(tutorialId, tutorialTitle, block, order, total) 
       ? `<iframe src="https://www.youtube.com/embed/${youtubeId}" title="${escapeAttribute(
           tutorialTitle
         )}" allowfullscreen loading="lazy"></iframe>`
-      : `<video controls data-extra-video-id="${block.id}" src="${escapeAttribute(block.url)}"></video>`;
+      : `<video controls playsinline webkit-playsinline="true" preload="metadata" data-extra-video-id="${block.id}" src="${escapeAttribute(block.url)}"></video>`;
   }
 
   const timestampsHtml = timestamps.length
@@ -3662,6 +7100,7 @@ function renderExtraMediaModule(tutorialId, tutorialTitle, block, order, total) 
               <textarea
                 class="module-note-editor"
                 data-extra-block-note-id="${block.id}"
+                data-extra-block-field="note"
                 data-extra-block-tutorial-id="${tutorialId}"
                 placeholder="Escribe una nota para este video..."
               >${escapeHtml(block.note || "")}</textarea>
@@ -3673,6 +7112,7 @@ function renderExtraMediaModule(tutorialId, tutorialTitle, block, order, total) 
               <textarea
                 class="module-note-editor"
                 data-extra-block-note-id="${block.id}"
+                data-extra-block-field="note"
                 data-extra-block-tutorial-id="${tutorialId}"
                 placeholder="Escribe una nota para esta imagen..."
               >${escapeHtml(block.note || "")}</textarea>
@@ -3704,10 +7144,13 @@ function renderExtraBlockMenu(tutorialId, blockId) {
   `;
 }
 
-function renderExtraMediaModuleV2(tutorialId, tutorialTitle, block, order, total) {
+function renderExtraMediaModuleV2(tutorialId, tutorialTitle, block, order, total, notesSideFallback = "right") {
+  const blockNotesSide = resolveBlockNotesSide(block, notesSideFallback);
+  const notesCollapseEnabled = shouldLockNotesHeight();
+  const blockNotesCollapsed = notesCollapseEnabled ? isExtraNotesCollapsed(tutorialId, block.id) : false;
   const youtubeId = extractYouTubeId(block.url);
   const timestamps = Array.isArray(block.timestamps) ? block.timestamps : [];
-  const orderMeta = total > 1 ? `<span class="meta">${order}/${total}</span>` : "";
+  const notePreviewHtml = buildMarkdownPreviewHtml(block.note || "");
   let mediaHtml = "";
   if (block.type === "image") {
     mediaHtml = `
@@ -3722,11 +7165,22 @@ function renderExtraMediaModuleV2(tutorialId, tutorialTitle, block, order, total
       </button>
     `;
   } else {
+    const shellClass = `window-media-shell${isLikelyPortraitEmbedUrl(block.url) ? " is-portrait-embed" : ""}`;
     mediaHtml = youtubeId
-      ? `<iframe src="https://www.youtube.com/embed/${youtubeId}" title="${escapeAttribute(
-          tutorialTitle
-        )}" allowfullscreen loading="lazy"></iframe>`
-      : `<video controls data-extra-video-id="${block.id}" src="${escapeAttribute(block.url)}"></video>`;
+      ? `
+        <div class="${shellClass}" data-window-media-shell>
+          <button type="button" class="window-media-toggle" data-toggle-window-media aria-expanded="false">Expandir ventana</button>
+          <iframe src="https://www.youtube.com/embed/${youtubeId}" title="${escapeAttribute(
+            tutorialTitle
+          )}" allowfullscreen loading="lazy"></iframe>
+        </div>
+      `
+      : `
+        <div class="window-media-shell" data-window-media-shell>
+          <button type="button" class="window-media-toggle" data-toggle-window-media aria-expanded="false">Expandir ventana</button>
+          <video controls playsinline webkit-playsinline="true" preload="metadata" data-extra-video-id="${block.id}" src="${escapeAttribute(block.url)}"></video>
+        </div>
+      `;
   }
 
   const timestampsHtml = block.type === "video" && timestamps.length
@@ -3760,20 +7214,29 @@ function renderExtraMediaModuleV2(tutorialId, tutorialTitle, block, order, total
     `
     : "";
 
-  const blockTypeLabel = block.type === "image" ? "Imagen" : "Video";
   return `
     <article
-      class="detail-extra-item media-module ${state.notesSide === "left" ? "is-notes-left" : ""}"
-      draggable="true"
-      data-extra-module-id="${block.id}"
-      data-extra-module-tutorial-id="${tutorialId}"
+      class="detail-extra-item media-module ${blockNotesSide === "left" ? "is-notes-left" : ""} ${blockNotesCollapsed ? "is-note-collapsed" : ""}"
+      data-extra-view-module-id="${block.id}"
+      data-extra-view-tutorial-id="${tutorialId}"
     >
-      <div class="detail-extra-head media-module-head">
-        <div class="media-module-title">
-          <button type="button" class="drag-handle" data-extra-drag-handle="1" title="Arrastra para mover">::</button>
-          <span class="tutorial-property-label">${blockTypeLabel}</span>
-          ${orderMeta}
-        </div>
+      <div class="detail-extra-head media-module-head media-module-head--compact">
+        ${
+          notesCollapseEnabled
+            ? `
+              <button
+                type="button"
+                class="notes-collapse-btn"
+                data-toggle-notes-collapse="1"
+                data-toggle-notes-tutorial-id="${tutorialId}"
+                data-toggle-notes-block-id="${block.id}"
+                aria-expanded="${blockNotesCollapsed ? "false" : "true"}"
+              >
+                ${blockNotesCollapsed ? "Mostrar" : "Ocultar"}
+              </button>
+            `
+            : `<span class="meta">Notas visibles</span>`
+        }
         ${renderExtraBlockMenuV2(tutorialId, block.id, order, total)}
       </div>
       <div class="media-module-grid">
@@ -3782,12 +7245,30 @@ function renderExtraMediaModuleV2(tutorialId, tutorialTitle, block, order, total
           <div class="detail-extra-body">${mediaHtml}</div>
           ${timestampsHtml}
         </div>
-        <section class="media-module-note">
-          <h5>Notas</h5>
+        <section class="media-module-note ${blockNotesCollapsed ? "is-collapsed" : ""}">
+          <div class="notes-card-head">
+            <h5>Notas</h5>
+          </div>
+          <div
+            class="markdown-body extra-note-markdown-view"
+            data-extra-note-markdown-preview-id="${block.id}"
+            data-rich-editable="1"
+            data-rich-extra-note-id="${block.id}"
+            data-rich-extra-note-tutorial-id="${tutorialId}"
+            data-extra-note-wrap-id="${block.id}"
+            data-placeholder="Escribe una nota para este bloque..."
+            contenteditable="true"
+            spellcheck="true"
+            tabindex="0"
+          >
+            ${notePreviewHtml}
+          </div>
           <textarea
-            class="module-note-editor"
+            class="module-note-editor hidden"
             data-extra-block-note-id="${block.id}"
+            data-extra-block-field="note"
             data-extra-block-tutorial-id="${tutorialId}"
+            data-markdown-enabled="1"
             placeholder="Escribe una nota para este bloque..."
           >${escapeHtml(block.note || "")}</textarea>
         </section>
@@ -3920,6 +7401,44 @@ function jumpExtraVideoToTimestamp(blockId, secondsRaw) {
   target.play().catch(() => {});
 }
 
+function jumpPrimaryVideoToTimestamp(secondsRaw) {
+  const seconds = Number(secondsRaw);
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    return;
+  }
+  const target = refs.detailPanel.querySelector("[data-primary-video='1']");
+  if (!(target instanceof HTMLVideoElement)) {
+    return;
+  }
+  target.currentTime = seconds;
+  target.play().catch(() => {});
+}
+
+function toggleWindowMediaShell(shellElement) {
+  if (!(shellElement instanceof HTMLElement)) {
+    return;
+  }
+  const shouldOpen = !shellElement.classList.contains("is-window-fullscreen");
+  closeWindowMediaShells();
+  shellElement.classList.toggle("is-window-fullscreen", shouldOpen);
+  const toggle = shellElement.querySelector("[data-toggle-window-media]");
+  if (toggle instanceof HTMLButtonElement) {
+    toggle.setAttribute("aria-expanded", shouldOpen ? "true" : "false");
+    toggle.textContent = shouldOpen ? "Reducir ventana" : "Expandir ventana";
+  }
+}
+
+function closeWindowMediaShells() {
+  document.querySelectorAll("[data-window-media-shell].is-window-fullscreen").forEach((node) => {
+    node.classList.remove("is-window-fullscreen");
+    const toggle = node.querySelector("[data-toggle-window-media]");
+    if (toggle instanceof HTMLButtonElement) {
+      toggle.setAttribute("aria-expanded", "false");
+      toggle.textContent = "Expandir ventana";
+    }
+  });
+}
+
 function openMediaPreviewDialog(url, caption = "", alt = "") {
   if (!refs.mediaPreviewDialog?.showModal || !refs.mediaPreviewImage) {
     return;
@@ -3957,7 +7476,44 @@ function scheduleNotesAutosave(tutorialId, value) {
   }
   notesAutosaveTimer = window.setTimeout(() => {
     void saveDetailNotesAutosave(tutorialId, value);
-  }, 700);
+  }, 250);
+}
+
+function schedulePrimaryTextAutosave(tutorialId, value) {
+  if (!tutorialId) {
+    return;
+  }
+  if (primaryTextAutosaveTimer) {
+    window.clearTimeout(primaryTextAutosaveTimer);
+  }
+  primaryTextAutosaveTimer = window.setTimeout(() => {
+    void savePrimaryTextAutosave(tutorialId, value);
+  }, 180);
+}
+
+async function savePrimaryTextAutosave(tutorialId, value) {
+  const tutorial = state.tutorials.find((item) => item.id === tutorialId);
+  if (!tutorial) {
+    return;
+  }
+  const nextText = coerceRichFieldValue(value, { migrateLegacy: true });
+  if (nextText === String(tutorial.textContent || "")) {
+    return;
+  }
+  const updatedAt = new Date().toISOString();
+  const payload = {
+    ...tutorial,
+    textContent: nextText,
+    updatedAt,
+  };
+  try {
+    await apiUpdateTutorial(tutorialId, payload);
+    tutorial.textContent = nextText;
+    tutorial.updatedAt = updatedAt;
+    setSyncStatus(`Guardado · ${new Date().toLocaleTimeString("es-BO", { hour: "2-digit", minute: "2-digit" })}`);
+  } catch (error) {
+    showOperationError(error, "No se pudo guardar el texto principal.");
+  }
 }
 
 async function saveDetailNotesAutosave(tutorialId, value) {
@@ -3965,7 +7521,7 @@ async function saveDetailNotesAutosave(tutorialId, value) {
   if (!tutorial) {
     return;
   }
-  const nextNotes = String(value || "");
+  const nextNotes = coerceRichFieldValue(value, { migrateLegacy: true });
   if (nextNotes === String(tutorial.notes || "")) {
     return;
   }
@@ -3998,28 +7554,43 @@ function scheduleExtraBlockFieldAutosave(tutorialId, blockId, field, value) {
   const timer = window.setTimeout(() => {
     extraBlockAutosaveTimers.delete(timerKey);
     void saveExtraBlockField(tutorialId, blockId, field, value);
-  }, 420);
+  }, 180);
   extraBlockAutosaveTimers.set(timerKey, timer);
+}
+
+function clearExtraBlockAutosaveTimer(tutorialId, blockId, field) {
+  if (!tutorialId || !blockId || !field) {
+    return;
+  }
+  const timerKey = `${tutorialId}:${blockId}:${field}`;
+  const existingTimer = extraBlockAutosaveTimers.get(timerKey);
+  if (existingTimer) {
+    window.clearTimeout(existingTimer);
+    extraBlockAutosaveTimers.delete(timerKey);
+  }
 }
 
 async function saveExtraBlockField(tutorialId, blockId, field, value) {
   if (!tutorialId || !blockId || !field) {
     return;
   }
-  if (!["note"].includes(field)) {
+  if (!["note", "text", "caption"].includes(field)) {
     return;
   }
   const tutorial = state.tutorials.find((item) => item.id === tutorialId);
   if (!tutorial) {
     return;
   }
-  const blocks = normalizeExtraContentBlocks(tutorial.extraContent);
+  const blocks = normalizeExtraContentBlocks(tutorial.extraContent, resolveTutorialNotesSide(tutorial));
   const index = blocks.findIndex((block) => block.id === blockId);
   if (index < 0) {
     return;
   }
   const current = blocks[index];
-  const nextValue = String(value || "");
+  const nextValue =
+    field === "note" || field === "text"
+      ? coerceRichFieldValue(value, { migrateLegacy: true })
+      : String(value || "");
   if (String(current[field] || "") === nextValue) {
     return;
   }
@@ -4032,7 +7603,7 @@ async function saveExtraBlockField(tutorialId, blockId, field, value) {
   const updatedAt = new Date().toISOString();
   const payload = {
     ...tutorial,
-    extraContent: normalizeExtraContentBlocks(nextBlocks),
+    extraContent: normalizeExtraContentBlocks(nextBlocks, resolveTutorialNotesSide(tutorial)),
     updatedAt,
   };
   try {
@@ -4041,7 +7612,7 @@ async function saveExtraBlockField(tutorialId, blockId, field, value) {
     tutorial.updatedAt = updatedAt;
     setSyncStatus(`Guardado · ${new Date().toLocaleTimeString("es-BO", { hour: "2-digit", minute: "2-digit" })}`);
   } catch (error) {
-    showOperationError(error, "No se pudo guardar la nota del modulo.");
+    showOperationError(error, "No se pudo guardar el bloque.");
   }
 }
 
@@ -4057,7 +7628,7 @@ function scheduleTutorialEditorPrimarySave(tutorialId, field, value) {
   const timer = window.setTimeout(() => {
     tutorialEditorAutosaveTimers.delete(timerKey);
     void saveTutorialEditorPrimaryField(tutorialId, field, value);
-  }, 420);
+  }, 220);
   tutorialEditorAutosaveTimers.set(timerKey, timer);
 }
 
@@ -4073,7 +7644,7 @@ function scheduleTutorialEditorExtraSave(tutorialId, blockId, field, value) {
   const timer = window.setTimeout(() => {
     tutorialEditorAutosaveTimers.delete(timerKey);
     void saveTutorialEditorExtraField(tutorialId, blockId, field, value);
-  }, 420);
+  }, 220);
   tutorialEditorAutosaveTimers.set(timerKey, timer);
 }
 
@@ -4131,18 +7702,20 @@ async function saveTutorialEditorPrimaryField(tutorialId, field, value) {
       break;
     }
     case "textContent": {
-      if (nextValue === tutorial.textContent) {
+      const nextStored = coerceRichFieldValue(nextValue);
+      if (nextStored === tutorial.textContent) {
         return;
       }
-      tutorial.textContent = nextValue;
+      tutorial.textContent = nextStored;
       changed = true;
       break;
     }
     case "notes": {
-      if (nextValue === tutorial.notes) {
+      const nextStored = coerceRichFieldValue(nextValue);
+      if (nextStored === tutorial.notes) {
         return;
       }
-      tutorial.notes = nextValue;
+      tutorial.notes = nextStored;
       changed = true;
       break;
     }
@@ -4186,7 +7759,7 @@ async function saveTutorialEditorExtraField(tutorialId, blockId, field, value) {
   if (!tutorial) {
     return;
   }
-  const blocks = normalizeExtraContentBlocks(tutorial.extraContent);
+  const blocks = normalizeExtraContentBlocks(tutorial.extraContent, resolveTutorialNotesSide(tutorial));
   const index = blocks.findIndex((block) => block.id === blockId);
   if (index < 0) {
     return;
@@ -4233,13 +7806,13 @@ async function saveTutorialEditorExtraField(tutorialId, blockId, field, value) {
       if (current.type !== "text") {
         return;
       }
-      if (!nextValue.trim()) {
-        return;
+      {
+        const nextStored = coerceRichFieldValue(nextValue);
+        if (nextStored === (current.text || "")) {
+          return;
+        }
+        nextBlock.text = nextStored;
       }
-      if (nextValue === (current.text || "")) {
-        return;
-      }
-      nextBlock.text = nextValue;
       break;
     case "timestamps":
       if (current.type !== "video") {
@@ -4254,10 +7827,13 @@ async function saveTutorialEditorExtraField(tutorialId, blockId, field, value) {
       }
       break;
     case "note":
-      if (nextValue === (current.note || "")) {
-        return;
+      {
+        const nextStored = coerceRichFieldValue(nextValue);
+        if (nextStored === (current.note || "")) {
+          return;
+        }
+        nextBlock.note = nextStored;
       }
-      nextBlock.note = nextValue;
       break;
     default:
       return;
@@ -4266,7 +7842,7 @@ async function saveTutorialEditorExtraField(tutorialId, blockId, field, value) {
   const nextBlocks = [...blocks];
   nextBlocks[index] = nextBlock;
   const updatedAt = new Date().toISOString();
-  tutorial.extraContent = normalizeExtraContentBlocks(nextBlocks);
+  tutorial.extraContent = normalizeExtraContentBlocks(nextBlocks, resolveTutorialNotesSide(tutorial));
   tutorial.updatedAt = updatedAt;
 
   const payload = {
@@ -4377,7 +7953,7 @@ async function discardExtraContentComposer(tutorialId) {
     return;
   }
 
-  const blocks = normalizeExtraContentBlocks(tutorial.extraContent);
+  const blocks = normalizeExtraContentBlocks(tutorial.extraContent, resolveTutorialNotesSide(tutorial));
   const nextBlocks = composer.blockId ? blocks.filter((block) => block.id !== composer.blockId) : blocks;
   state.extraComposer = null;
   clearLiveTextDraft(tutorialId);
@@ -4413,7 +7989,7 @@ function scheduleExtraComposerAutosave(tutorialId) {
   }
   extraComposerAutosaveTimer = window.setTimeout(() => {
     void autosaveExtraComposerText(tutorialId);
-  }, 260);
+  }, 150);
 }
 
 async function autosaveExtraComposerText(tutorialId) {
@@ -4427,7 +8003,8 @@ async function autosaveExtraComposerText(tutorialId) {
   }
   const text = String(composer.text || "");
   const caption = String(composer.caption || "").trim();
-  const blocks = normalizeExtraContentBlocks(tutorial.extraContent);
+  const tutorialNotesSide = resolveTutorialNotesSide(tutorial);
+  const blocks = normalizeExtraContentBlocks(tutorial.extraContent, tutorialNotesSide);
   const blockId = composer.blockId || createId();
   composer.blockId = blockId;
   let nextBlocks = [...blocks];
@@ -4438,12 +8015,15 @@ async function autosaveExtraComposerText(tutorialId) {
       return;
     }
   } else {
+    const previousBlock = nextBlocks.find((block) => block.id === blockId) || null;
     const nextBlock = {
       id: blockId,
       type: "text",
       text,
       caption,
-      createdAt: new Date().toISOString(),
+      note: previousBlock?.note || "",
+      noteSide: resolveBlockNotesSide(previousBlock, tutorialNotesSide),
+      createdAt: previousBlock?.createdAt || new Date().toISOString(),
     };
     const idx = nextBlocks.findIndex((block) => block.id === blockId);
     if (idx >= 0) {
@@ -4456,7 +8036,7 @@ async function autosaveExtraComposerText(tutorialId) {
   const updatedAt = new Date().toISOString();
   const payload = {
     ...tutorial,
-    extraContent: normalizeExtraContentBlocks(nextBlocks),
+    extraContent: normalizeExtraContentBlocks(nextBlocks, tutorialNotesSide),
     updatedAt,
   };
 
@@ -4496,6 +8076,8 @@ async function saveExtraContentComposer(tutorialId) {
       type: "text",
       text,
       caption,
+      note: "",
+      noteSide: resolveTutorialNotesSide(tutorial),
       createdAt: new Date().toISOString(),
     };
   } else {
@@ -4509,11 +8091,13 @@ async function saveExtraContentComposer(tutorialId) {
       type: composer.type,
       url,
       caption,
+      note: "",
+      noteSide: resolveTutorialNotesSide(tutorial),
       createdAt: new Date().toISOString(),
     };
   }
 
-  const nextBlocks = normalizeExtraContentBlocks([...(tutorial.extraContent || []), block]);
+  const nextBlocks = normalizeExtraContentBlocks([...(tutorial.extraContent || []), block], resolveTutorialNotesSide(tutorial));
   const payload = {
     ...tutorial,
     extraContent: nextBlocks,
@@ -4548,7 +8132,11 @@ function openExtraMediaDialog(tutorialId, type) {
   if (refs.extraMediaTimestampsInput) {
     refs.extraMediaTimestampsInput.value = "";
   }
-  setExtraMediaDialogStatus("");
+  setExtraMediaDialogStatus(
+    normalizedType === "image"
+      ? "Puedes pegar una o varias URLs (una por linea) o subir imagenes desde tu dispositivo."
+      : "Puedes pegar una URL de video o subir un archivo de video local."
+  );
   setExtraMediaDialogMode("url");
   if (!refs.extraMediaDialog.open) {
     refs.extraMediaDialog.showModal();
@@ -4577,6 +8165,15 @@ function setExtraMediaDialogMode(mode) {
     refs.extraMediaFileInput.accept = isVideo ? "video/*" : "image/*";
     refs.extraMediaFileInput.multiple = !isVideo;
   }
+  setExtraMediaDialogStatus(
+    next === "url"
+      ? isVideo
+        ? "Pega la URL del video que quieres agregar."
+        : "Pega una o varias URLs de imagen (una por linea)."
+      : isVideo
+        ? "Selecciona un video desde tu dispositivo."
+        : "Selecciona una o varias imagenes desde tu dispositivo."
+  );
 }
 
 function setExtraMediaDialogStatus(message, isError = false) {
@@ -4659,6 +8256,7 @@ async function saveExtraMediaFromDialog() {
           url,
           caption,
           note: "",
+          noteSide: resolveTutorialNotesSide(tutorial),
           timestamps: context.type === "video" ? timestamps : [],
           createdAt: new Date().toISOString(),
         });
@@ -4694,13 +8292,14 @@ async function saveExtraMediaFromDialog() {
               ? `Subiendo ${index + 1}/${files.length}: ${percent}%`
               : `Subiendo archivo... ${percent}%`
           );
-        });
+        }, { tutorialId: context.tutorialId });
         blocksToAdd.push({
           id: createId(),
           type: context.type,
           url: uploaded.url,
           caption,
           note: "",
+          noteSide: resolveTutorialNotesSide(tutorial),
           timestamps: context.type === "video" ? timestamps : [],
           createdAt: new Date().toISOString(),
         });
@@ -4712,7 +8311,7 @@ async function saveExtraMediaFromDialog() {
       return;
     }
 
-    const nextBlocks = normalizeExtraContentBlocks([...(tutorial.extraContent || []), ...blocksToAdd]);
+    const nextBlocks = normalizeExtraContentBlocks([...(tutorial.extraContent || []), ...blocksToAdd], resolveTutorialNotesSide(tutorial));
     const updatedAt = new Date().toISOString();
     const payload = {
       ...tutorial,
@@ -4747,7 +8346,7 @@ async function removeExtraContentBlock(tutorialId, blockId) {
   if (!tutorial) {
     return;
   }
-  const blocks = normalizeExtraContentBlocks(tutorial.extraContent);
+  const blocks = normalizeExtraContentBlocks(tutorial.extraContent, resolveTutorialNotesSide(tutorial));
   const nextBlocks = blocks.filter((block) => block.id !== blockId);
   if (nextBlocks.length === blocks.length) {
     return;
@@ -4786,9 +8385,10 @@ async function addEditorTextBlock(tutorialId) {
       text: "Nuevo bloque de texto",
       caption: "",
       note: "",
+      noteSide: resolveTutorialNotesSide(tutorial),
       createdAt: new Date().toISOString(),
     },
-  ]);
+  ], resolveTutorialNotesSide(tutorial));
   const updatedAt = new Date().toISOString();
   const payload = {
     ...tutorial,
@@ -4813,10 +8413,15 @@ function renderEmptyInto(container) {
 
 function openDialogForCreate() {
   state.editingId = null;
+  closeEmojiPickerPanel();
+  hideDialogMiniEditor();
   refs.dialogTitle.textContent = "Nuevo tutorial";
   refs.deleteButton.classList.add("hidden");
   refs.tutorialForm.reset();
   refs.typeInput.value = "video";
+  refs.tutorialForm.elements.emoji.value = "";
+  refs.tutorialForm.elements.emojiColor.value = "default";
+  syncEmojiPickerToggleIcon();
   syncTypeSpecificFields();
   refs.sourceInput.value = "youtube";
   resetUploadProgress();
@@ -4829,7 +8434,13 @@ function openDialogForEdit(id) {
   if (!t) {
     return;
   }
+  closeEmojiPickerPanel();
   state.editingId = id;
+  if (state.page === "tutorial" && state.tutorialEditMode) {
+    state.tutorialEditMode = false;
+    render();
+  }
+  renderDialogMiniEditor(id);
   refs.dialogTitle.textContent = "Editar tutorial";
   refs.deleteButton.classList.remove("hidden");
   refs.tutorialForm.elements.title.value = t.title;
@@ -4843,10 +8454,17 @@ function openDialogForEdit(id) {
   refs.tutorialForm.elements.priority.value = t.priority;
   refs.tutorialForm.elements.reviewDate.value = t.reviewDate || "";
   refs.tutorialForm.elements.tags.value = t.tags.join(", ");
+  refs.tutorialForm.elements.emoji.value = normalizeEmoji(t.emoji || "");
+  refs.tutorialForm.elements.emojiColor.value = normalizeEmojiColor(t.emojiColor || "default", "default");
+  syncEmojiPickerToggleIcon();
   refs.tutorialForm.elements.imageUrl.value = t.imageUrl || "";
-  refs.tutorialForm.elements.textContent.value = t.textContent || "";
-  refs.tutorialForm.elements.notes.value = t.notes || "";
-  refs.tutorialForm.elements.timestamps.value = t.timestamps.join("\n");
+  refs.tutorialForm.elements.textContent.value = richStoredValueToPlainText(t.textContent || "");
+  if (refs.tutorialForm.elements.notes) {
+    refs.tutorialForm.elements.notes.value = richStoredValueToPlainText(t.notes || "");
+  }
+  if (refs.tutorialForm.elements.timestamps) {
+    refs.tutorialForm.elements.timestamps.value = t.timestamps.join("\n");
+  }
   resetUploadProgress();
   setUploadStatus("Puedes arrastrar un archivo para reemplazar contenido.", false);
   refs.dialog.showModal();
@@ -4878,7 +8496,7 @@ async function upsertTutorialFromForm() {
     url,
     normalizedUrl,
     imageUrl: f.imageUrl.value.trim(),
-    textContent: f.textContent.value.trim(),
+    textContent: coerceRichFieldValue(f.textContent.value),
     category: f.category.value.trim(),
     collection: f.collection.value.trim(),
     status: f.status.value,
@@ -4886,9 +8504,16 @@ async function upsertTutorialFromForm() {
     isFavorite: current ? Boolean(current.isFavorite) : false,
     reviewDate: f.reviewDate.value,
     tags: parseTags(f.tags.value),
-    notes: f.notes.value.trim(),
-    timestamps: f.timestamps.value.split("\n").map((line) => line.trim()).filter(Boolean),
-    extraContent: current ? normalizeExtraContentBlocks(current.extraContent) : [],
+    emoji: normalizeEmoji(f.emoji.value),
+    emojiColor: normalizeEmojiColor(f.emojiColor.value, "default"),
+    notes: f.notes ? coerceRichFieldValue(f.notes.value) : current?.notes || "",
+    timestamps: f.timestamps
+      ? f.timestamps.value.split("\n").map((line) => line.trim()).filter(Boolean)
+      : Array.isArray(current?.timestamps)
+        ? [...current.timestamps]
+        : [],
+    notesSide: current ? resolveTutorialNotesSide(current) : state.notesSide,
+    extraContent: current ? normalizeExtraContentBlocks(current.extraContent, resolveTutorialNotesSide(current)) : [],
     updatedAt: now,
   };
 
@@ -4993,7 +8618,7 @@ async function handlePickedFile(file) {
     const uploaded = await apiUploadFile(file, (percent) => {
       setUploadProgress(percent, true);
       setUploadStatus(`Subiendo archivo... ${percent}%`, false);
-    });
+    }, { tutorialId: state.editingId || state.selectedId || "" });
     setUploadProgress(100, true);
     const uploadedUrl = uploaded.url;
     if (file.type.startsWith("image/")) {
@@ -5040,8 +8665,9 @@ function ensureTitleFromFile(fileName) {
 }
 
 function validateFileBeforeUpload(file) {
-  if (file.size > MAX_UPLOAD_SIZE_BYTES) {
-    return "El archivo supera el maximo de 250MB.";
+  const maxUploadBytes = getEffectiveMaxUploadBytes();
+  if (file.size > maxUploadBytes) {
+    return `El archivo supera el maximo de ${formatBytesForUi(maxUploadBytes)}.`;
   }
 
   const lowerName = file.name.toLowerCase();
@@ -5054,6 +8680,22 @@ function validateFileBeforeUpload(file) {
   }
 
   return "Tipo de archivo no soportado. Usa imagen, video o texto.";
+}
+
+function formatBytesForUi(bytes) {
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value <= 0) {
+    return "0B";
+  }
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let size = value;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  const rounded = size >= 100 || unitIndex === 0 ? Math.round(size) : Math.round(size * 10) / 10;
+  return `${rounded}${units[unitIndex]}`;
 }
 
 function setUploadStatus(message, isError) {
@@ -5348,6 +8990,203 @@ function tutorialTypeToken(type) {
   return "T";
 }
 
+function normalizeEmojiColor(value, fallback = "default") {
+  if (EMOJI_COLOR_KEYS.includes(value)) {
+    return value;
+  }
+  return EMOJI_COLOR_KEYS.includes(fallback) ? fallback : "default";
+}
+
+function normalizeEmoji(value) {
+  return String(value || "").trim().slice(0, 8);
+}
+
+function normalizeEmojiPickerCategory(value) {
+  const next = String(value || "").trim().toLowerCase();
+  return EMOJI_PICKER_TABS.some((tab) => tab.id === next) ? next : "recent";
+}
+
+function normalizeSearchToken(value) {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+}
+
+function loadRecentEmojiSymbols() {
+  try {
+    const raw = localStorage.getItem(EMOJI_PICKER_STORAGE_KEY);
+    if (!raw) {
+      return [];
+    }
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .map((value) => normalizeEmoji(value))
+      .filter((symbol) => symbol && EMOJI_PICKER_ENTRY_MAP.has(symbol))
+      .slice(0, EMOJI_PICKER_MAX_RECENT);
+  } catch {
+    return [];
+  }
+}
+
+function saveRecentEmojiSymbols(symbols) {
+  try {
+    localStorage.setItem(EMOJI_PICKER_STORAGE_KEY, JSON.stringify(symbols.slice(0, EMOJI_PICKER_MAX_RECENT)));
+  } catch {}
+}
+
+function registerRecentEmojiSymbol(symbol) {
+  const next = normalizeEmoji(symbol);
+  if (!next || !EMOJI_PICKER_ENTRY_MAP.has(next)) {
+    return;
+  }
+  recentEmojiSymbols = [next, ...recentEmojiSymbols.filter((item) => item !== next)].slice(0, EMOJI_PICKER_MAX_RECENT);
+  saveRecentEmojiSymbols(recentEmojiSymbols);
+}
+
+function getEmojiEntriesForCategory(category) {
+  if (category === "recent") {
+    return EMOJI_PICKER_ALL_ENTRIES;
+  }
+  return EMOJI_PICKER_LIBRARY[category] || EMOJI_PICKER_ALL_ENTRIES;
+}
+
+function matchesEmojiQuery(entry, query) {
+  if (!query) {
+    return true;
+  }
+  const haystack = normalizeSearchToken(`${entry.symbol} ${entry.label} ${entry.keywords || ""}`);
+  return haystack.includes(query);
+}
+
+function renderEmojiPickerButtons(entries) {
+  return entries
+    .map(
+      (entry) => `
+        <button
+          type="button"
+          class="emoji-picker-item"
+          data-emoji-pick="${escapeAttribute(entry.symbol)}"
+          title="${escapeAttribute(entry.label)}"
+          aria-label="${escapeAttribute(entry.label)}"
+        >
+          ${escapeHtml(entry.symbol)}
+        </button>
+      `
+    )
+    .join("");
+}
+
+function renderEmojiPickerPanel() {
+  if (!refs.emojiPickerPanel || !refs.emojiPickerGrid || !refs.emojiPickerRecentGrid || !refs.emojiPickerCategoryTitle) {
+    return;
+  }
+  const category = normalizeEmojiPickerCategory(state.emojiPickerCategory);
+  state.emojiPickerCategory = category;
+  const query = normalizeSearchToken(refs.emojiPickerSearch?.value || "");
+  const currentTab = EMOJI_PICKER_TABS.find((tab) => tab.id === category) || EMOJI_PICKER_TABS[0];
+
+  refs.emojiPickerCategoryButtons.forEach((button) => {
+    button.classList.toggle("is-active", normalizeEmojiPickerCategory(button.dataset.emojiCategory) === category);
+  });
+
+  const recentEntries = recentEmojiSymbols
+    .map((symbol) => EMOJI_PICKER_ENTRY_MAP.get(symbol))
+    .filter((entry) => entry && matchesEmojiQuery(entry, query));
+  refs.emojiPickerRecentGrid.innerHTML = recentEntries.length
+    ? renderEmojiPickerButtons(recentEntries)
+    : `<p class="meta">Sin recientes.</p>`;
+
+  const categoryEntries = getEmojiEntriesForCategory(category).filter((entry) => matchesEmojiQuery(entry, query));
+  refs.emojiPickerCategoryTitle.textContent = category === "recent" ? "Todos" : currentTab.label;
+  refs.emojiPickerGrid.innerHTML = categoryEntries.length ? renderEmojiPickerButtons(categoryEntries) : "";
+  refs.emojiPickerEmpty?.classList.toggle("hidden", categoryEntries.length > 0);
+}
+
+function syncEmojiPickerToggleIcon() {
+  if (!(refs.emojiPickerToggle instanceof HTMLElement)) {
+    return;
+  }
+  const emojiInput = refs.tutorialForm?.elements?.emoji;
+  const symbol = emojiInput instanceof HTMLInputElement ? normalizeEmoji(emojiInput.value) : "";
+  refs.emojiPickerToggle.textContent = symbol || "☺";
+}
+
+function isEmojiPickerOpen() {
+  return refs.emojiPickerPanel instanceof HTMLElement && !refs.emojiPickerPanel.classList.contains("hidden");
+}
+
+function openEmojiPickerPanel() {
+  if (!refs.emojiPickerPanel) {
+    return;
+  }
+  refs.emojiPickerPanel.classList.remove("hidden");
+  refs.emojiPickerToggle?.setAttribute("aria-expanded", "true");
+  renderEmojiPickerPanel();
+  window.setTimeout(() => refs.emojiPickerSearch?.focus(), 0);
+}
+
+function closeEmojiPickerPanel() {
+  if (!refs.emojiPickerPanel) {
+    return;
+  }
+  refs.emojiPickerPanel.classList.add("hidden");
+  refs.emojiPickerToggle?.setAttribute("aria-expanded", "false");
+  if (refs.emojiPickerSearch instanceof HTMLInputElement) {
+    refs.emojiPickerSearch.value = "";
+  }
+}
+
+function toggleEmojiPickerPanel() {
+  if (isEmojiPickerOpen()) {
+    closeEmojiPickerPanel();
+    return;
+  }
+  openEmojiPickerPanel();
+}
+
+function applyPickedEmojiSymbol(symbol) {
+  const next = normalizeEmoji(symbol);
+  if (!next) {
+    return;
+  }
+  const emojiInput = refs.tutorialForm?.elements?.emoji;
+  if (emojiInput instanceof HTMLInputElement) {
+    emojiInput.value = next;
+    emojiInput.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  registerRecentEmojiSymbol(next);
+  syncEmojiPickerToggleIcon();
+  renderEmojiPickerPanel();
+  closeEmojiPickerPanel();
+}
+
+function renderSidebarTutorialToken(tutorial) {
+  const emoji = normalizeEmoji(tutorial?.emoji);
+  const emojiColor = normalizeEmojiColor(tutorial?.emojiColor, "default");
+  if (emoji) {
+    return `<span class="sidebar-tutorial-token is-emoji emoji-color-${emojiColor}">${escapeHtml(emoji)}</span>`;
+  }
+  return `<span class="sidebar-tutorial-token">${tutorialTypeToken(tutorial?.type)}</span>`;
+}
+
+function renderTutorialTitleToken(tutorial) {
+  const emoji = normalizeEmoji(tutorial?.emoji);
+  const emojiColor = normalizeEmojiColor(tutorial?.emojiColor, "default");
+  if (emoji) {
+    return `<span class="tutorial-title-token is-emoji emoji-color-${emojiColor}" aria-hidden="true">${escapeHtml(emoji)}</span>`;
+  }
+  return `<span class="tutorial-title-token" aria-hidden="true">${tutorialTypeToken(tutorial?.type)}</span>`;
+}
+
+function renderTutorialDisplayTitle(tutorial) {
+  return `${renderTutorialTitleToken(tutorial)}${escapeHtml(tutorial?.title || "Sin titulo")}`;
+}
+
 function renderStatusOptions(selected) {
   return STATUS_ORDER.map((status) => `<option value="${status}" ${selected === status ? "selected" : ""}>${status}</option>`).join("");
 }
@@ -5417,6 +9256,19 @@ function isLikelyVideoUrl(url) {
   return !!url && (/(\.mp4|\.webm|\.mov|\.ogg)(\?.*)?$/i.test(url) || url.startsWith("/uploads/"));
 }
 
+function isLikelyPortraitEmbedUrl(url) {
+  const lower = String(url || "").toLowerCase();
+  if (!lower) {
+    return false;
+  }
+  return (
+    lower.includes("/shorts/") ||
+    lower.includes("instagram.com/reel") ||
+    lower.includes("tiktok.com/") ||
+    lower.includes("facebook.com/reel")
+  );
+}
+
 function normalizeUrl(url) {
   if (!url) {
     return "";
@@ -5438,8 +9290,896 @@ function escapeAttribute(value) {
   return escapeHtml(value);
 }
 
+function sanitizeCssColor(raw, fallback = "") {
+  const value = String(raw || "").trim();
+  if (!value) {
+    return fallback;
+  }
+  if (/^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value)) {
+    return value;
+  }
+  if (/^rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}(?:\s*,\s*(?:0|1|0?\.\d+))?\s*\)$/i.test(value)) {
+    return value.replace(/\s+/g, " ");
+  }
+  if (/^rgba?\([^)]+\)$/i.test(value)) {
+    return value;
+  }
+  if (/^(?:currentColor|transparent)$/i.test(value)) {
+    return value;
+  }
+  if (/^[a-z]{3,20}$/i.test(value)) {
+    return value.toLowerCase();
+  }
+  return fallback;
+}
+
+function parseColorTokenToRgbTriplet(raw) {
+  const value = String(raw || "").trim();
+  if (!value) {
+    return null;
+  }
+  const hex = value.match(/^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i);
+  if (hex) {
+    const token = hex[1];
+    if (token.length === 3) {
+      const r = Number.parseInt(token[0] + token[0], 16);
+      const g = Number.parseInt(token[1] + token[1], 16);
+      const b = Number.parseInt(token[2] + token[2], 16);
+      return [r, g, b];
+    }
+    const r = Number.parseInt(token.slice(0, 2), 16);
+    const g = Number.parseInt(token.slice(2, 4), 16);
+    const b = Number.parseInt(token.slice(4, 6), 16);
+    return [r, g, b];
+  }
+  const rgb = value.match(/^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*(?:0|1|0?\.\d+))?\s*\)$/i);
+  if (rgb) {
+    const clamp = (n) => Math.max(0, Math.min(255, Number.parseInt(n, 10) || 0));
+    return [clamp(rgb[1]), clamp(rgb[2]), clamp(rgb[3])];
+  }
+  return null;
+}
+
+function isRichHtmlStoredValue(raw) {
+  return String(raw || "").startsWith(RICH_HTML_STORAGE_PREFIX);
+}
+
+function decodeStoredRichHtml(raw) {
+  const value = String(raw || "");
+  if (!isRichHtmlStoredValue(value)) {
+    return "";
+  }
+  return value.slice(RICH_HTML_STORAGE_PREFIX.length);
+}
+
+function normalizeRichEditableHtml(rawHtml) {
+  const root = document.createElement("div");
+  root.innerHTML = String(rawHtml || "");
+
+  root.querySelectorAll("script,style,iframe,object,embed,meta,link").forEach((node) => node.remove());
+
+  const allowedTags = new Set(["p", "br", "strong", "b", "em", "i", "u", "code", "a", "blockquote", "ul", "ol", "li", "h3", "h4", "h5", "span", "mark"]);
+
+  Array.from(root.childNodes).forEach((node) => {
+    if (node.nodeType === Node.ELEMENT_NODE && node.tagName.toLowerCase() === "div") {
+      const p = document.createElement("p");
+      while (node.firstChild) {
+        p.appendChild(node.firstChild);
+      }
+      node.replaceWith(p);
+    }
+  });
+
+  const unwrapElement = (element) => {
+    if (!(element instanceof Element) || !element.parentNode) {
+      return;
+    }
+    while (element.firstChild) {
+      element.parentNode.insertBefore(element.firstChild, element);
+    }
+    element.parentNode.removeChild(element);
+  };
+
+  root.querySelectorAll("b").forEach((node) => {
+    const strong = document.createElement("strong");
+    while (node.firstChild) {
+      strong.appendChild(node.firstChild);
+    }
+    node.replaceWith(strong);
+  });
+  root.querySelectorAll("i").forEach((node) => {
+    const em = document.createElement("em");
+    while (node.firstChild) {
+      em.appendChild(node.firstChild);
+    }
+    node.replaceWith(em);
+  });
+
+  Array.from(root.querySelectorAll("*")).forEach((element) => {
+    const tag = element.tagName.toLowerCase();
+    if (!allowedTags.has(tag)) {
+      unwrapElement(element);
+      return;
+    }
+
+    Array.from(element.attributes).forEach((attribute) => {
+      const name = attribute.name.toLowerCase();
+      if (name.startsWith("on")) {
+        element.removeAttribute(attribute.name);
+        return;
+      }
+      if (name === "style" || name.startsWith("data-md-")) {
+        return;
+      }
+      if (tag === "a" && ["href", "target", "rel"].includes(name)) {
+        return;
+      }
+      element.removeAttribute(attribute.name);
+    });
+
+    if (tag === "a") {
+      const href = String(element.getAttribute("href") || "").trim();
+      if (!/^https?:\/\//i.test(href)) {
+        element.removeAttribute("href");
+      } else {
+        element.setAttribute("href", href);
+      }
+      element.setAttribute("target", "_blank");
+      element.setAttribute("rel", "noreferrer");
+    }
+
+    if (tag === "mark") {
+      const highlight = getInlineHighlightColorToken(element);
+      if (highlight) {
+        element.setAttribute("data-md-highlight", highlight);
+        element.style.backgroundColor = highlight;
+      } else {
+        element.removeAttribute("data-md-highlight");
+        element.style.removeProperty("background");
+        element.style.removeProperty("background-color");
+      }
+    }
+
+    if (tag === "span") {
+      const color = getInlineTextColorToken(element);
+      const underline = elementHasUnderlineDecoration(element) ? getInlineUnderlineColorToken(element) : "";
+      element.removeAttribute("data-md-color");
+      element.removeAttribute("data-md-underline");
+      element.style.removeProperty("color");
+      element.style.removeProperty("text-decoration");
+      element.style.removeProperty("text-decoration-line");
+      element.style.removeProperty("text-decoration-color");
+      if (color) {
+        element.setAttribute("data-md-color", color);
+        element.style.color = color;
+      }
+      if (underline) {
+        element.setAttribute("data-md-underline", underline);
+        element.style.textDecorationLine = "underline";
+        element.style.textDecorationColor = underline;
+      }
+      if (!color && !underline) {
+        unwrapElement(element);
+      }
+    }
+  });
+
+  const getSemanticStyleKey = (element) => {
+    if (!(element instanceof Element)) {
+      return "";
+    }
+    const tag = element.tagName.toLowerCase();
+    if (tag === "mark") {
+      const highlight = normalizeColorTokenKey(getInlineHighlightColorToken(element));
+      return highlight ? `mark:${highlight}` : "";
+    }
+    if (tag === "span") {
+      const color = normalizeColorTokenKey(getInlineTextColorToken(element));
+      const underline = elementHasUnderlineDecoration(element)
+        ? normalizeColorTokenKey(getInlineUnderlineColorToken(element))
+        : "";
+      if (!color && !underline) {
+        return "";
+      }
+      return `span:c=${color};u=${underline}`;
+    }
+    if (tag === "strong" || tag === "em" || tag === "u" || tag === "code" || tag === "blockquote" || tag === "a") {
+      if (tag === "a") {
+        return `a:${String(element.getAttribute("href") || "").trim().toLowerCase()}`;
+      }
+      return tag;
+    }
+    return "";
+  };
+
+  const isWrapperVisuallyEmpty = (element) => {
+    if (!(element instanceof Element)) {
+      return true;
+    }
+    if (element.querySelector("br")) {
+      return false;
+    }
+    const text = String(element.textContent || "").replace(/\u00a0/g, " ").trim();
+    return !text;
+  };
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+
+    root.querySelectorAll("mark mark").forEach((node) => {
+      unwrapElement(node);
+      changed = true;
+    });
+
+    root.querySelectorAll("span span").forEach((node) => {
+      const parent = node.parentElement;
+      if (!(parent instanceof Element)) {
+        return;
+      }
+      const parentKey = getSemanticStyleKey(parent);
+      const childKey = getSemanticStyleKey(node);
+      if (parentKey && childKey && parentKey === childKey) {
+        unwrapElement(node);
+        changed = true;
+      }
+    });
+
+    root.querySelectorAll("span,mark,strong,em,u,code,a").forEach((node) => {
+      if (isWrapperVisuallyEmpty(node)) {
+        node.remove();
+        changed = true;
+      }
+    });
+
+    root.querySelectorAll("*").forEach((parent) => {
+      if (!(parent instanceof Element)) {
+        return;
+      }
+      let child = parent.firstChild;
+      while (child) {
+        const next = child.nextSibling;
+        if (
+          child instanceof Element &&
+          next instanceof Element &&
+          getSemanticStyleKey(child) &&
+          getSemanticStyleKey(child) === getSemanticStyleKey(next)
+        ) {
+          while (next.firstChild) {
+            child.appendChild(next.firstChild);
+          }
+          next.remove();
+          changed = true;
+          continue;
+        }
+        child = next;
+      }
+    });
+  }
+
+  root.normalize();
+
+  const normalized = root.innerHTML.trim();
+  return normalized;
+}
+
+function serializeRichEditableContent(rawHtml) {
+  const normalized = normalizeRichEditableHtml(rawHtml);
+  return normalized ? `${RICH_HTML_STORAGE_PREFIX}${normalized}` : "";
+}
+
 function nl2br(value) {
   return String(value).replaceAll("\n", "<br>");
+}
+
+function renderMarkdown(value) {
+  const lines = String(value || "").split(/\r?\n/);
+  if (!lines.length) {
+    return "<p>Sin contenido.</p>";
+  }
+  const html = [];
+  let inList = false;
+  const flushList = () => {
+    if (inList) {
+      html.push("</ul>");
+      inList = false;
+    }
+  };
+
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      flushList();
+      return;
+    }
+    const listMatch = trimmed.match(/^[-*]\s+(.+)$/);
+    if (listMatch) {
+      if (!inList) {
+        html.push("<ul>");
+        inList = true;
+      }
+      html.push(`<li>${renderMarkdownInline(listMatch[1])}</li>`);
+      return;
+    }
+    flushList();
+    if (/^###\s+/.test(trimmed)) {
+      html.push(`<h5>${renderMarkdownInline(trimmed.replace(/^###\s+/, ""))}</h5>`);
+      return;
+    }
+    if (/^##\s+/.test(trimmed)) {
+      html.push(`<h4>${renderMarkdownInline(trimmed.replace(/^##\s+/, ""))}</h4>`);
+      return;
+    }
+    if (/^#\s+/.test(trimmed)) {
+      html.push(`<h3>${renderMarkdownInline(trimmed.replace(/^#\s+/, ""))}</h3>`);
+      return;
+    }
+    if (/^>\s+/.test(trimmed)) {
+      html.push(`<blockquote>${renderMarkdownInline(trimmed.replace(/^>\s+/, ""))}</blockquote>`);
+      return;
+    }
+    html.push(`<p>${renderMarkdownInline(trimmed)}</p>`);
+  });
+  flushList();
+  return html.join("") || "<p>Sin contenido.</p>";
+}
+
+function extractStylePropertyValue(styleRaw, property) {
+  const source = String(styleRaw || "");
+  if (!source) {
+    return "";
+  }
+  const pattern = new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*([^;]+)`, "i");
+  const match = source.match(pattern);
+  return match ? String(match[1] || "").trim() : "";
+}
+
+function extractColorTokenFromCssValue(rawValue) {
+  const value = String(rawValue || "").trim();
+  if (!value) {
+    return "";
+  }
+  const direct = sanitizeCssColor(value, "");
+  if (direct) {
+    return direct;
+  }
+  const rgbMatch = value.match(/rgba?\([^)]+\)/i);
+  if (rgbMatch) {
+    const rgbColor = sanitizeCssColor(rgbMatch[0], "");
+    if (rgbColor) {
+      return rgbColor;
+    }
+  }
+  const hexMatch = value.match(/#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})/i);
+  if (hexMatch) {
+    const hexColor = sanitizeCssColor(hexMatch[0], "");
+    if (hexColor) {
+      return hexColor;
+    }
+  }
+  const namedMatch = value.match(/\b[a-z]{3,20}\b/i);
+  if (namedMatch) {
+    const namedColor = sanitizeCssColor(namedMatch[0], "");
+    if (namedColor) {
+      return namedColor;
+    }
+  }
+  return "";
+}
+
+function normalizeColorTokenKey(color) {
+  const token = sanitizeCssColor(color, "");
+  if (!token) {
+    return "";
+  }
+  const rgb = parseColorTokenToRgbTriplet(token);
+  if (rgb) {
+    return `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+  }
+  return token.toLowerCase().replace(/\s+/g, "");
+}
+
+function plainTextToParagraphsHtml(raw) {
+  const source = String(raw || "").replace(/\r\n/g, "\n");
+  if (!source.trim()) {
+    return "";
+  }
+  const blocks = source
+    .split(/\n{2,}/)
+    .map((chunk) => chunk.trim())
+    .filter(Boolean);
+  const htmlBlocks = blocks.map((chunk) => `<p>${escapeHtml(chunk).replace(/\n/g, "<br>")}</p>`);
+  return htmlBlocks.join("");
+}
+
+function richStoredValueToPlainText(raw) {
+  const value = String(raw || "");
+  if (!value) {
+    return "";
+  }
+  if (!isRichHtmlStoredValue(value)) {
+    return value;
+  }
+  const root = document.createElement("div");
+  root.innerHTML = normalizeRichEditableHtml(decodeStoredRichHtml(value));
+  const text = typeof root.innerText === "string" ? root.innerText : String(root.textContent || "");
+  return text.replace(/\r\n/g, "\n").trim();
+}
+
+function containsLegacyInlineSyntax(raw) {
+  const text = String(raw || "");
+  if (!text) {
+    return false;
+  }
+  return /(\{\{(?:bg|c|u):|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^\s)]+\)|\*\*[^*]+\*\*|(^|[^*])\*[^*]+\*(?!\*)|(^|[^_])_[^_]+_(?!_))/m.test(text);
+}
+
+function expandLegacyInlineSyntaxInElement(root) {
+  if (!(root instanceof HTMLElement)) {
+    return;
+  }
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const targets = [];
+  let current = walker.nextNode();
+  while (current) {
+    const node = current;
+    const text = String(node.textContent || "");
+    if (text.trim() && containsLegacyInlineSyntax(text)) {
+      const parentTag = node.parentElement?.tagName?.toLowerCase() || "";
+      if (!["script", "style", "code"].includes(parentTag)) {
+        targets.push(node);
+      }
+    }
+    current = walker.nextNode();
+  }
+  targets.forEach((node) => {
+    if (!node.parentNode) {
+      return;
+    }
+    const holder = document.createElement("span");
+    holder.innerHTML = renderMarkdownInline(String(node.textContent || ""));
+    const fragment = document.createDocumentFragment();
+    while (holder.firstChild) {
+      fragment.appendChild(holder.firstChild);
+    }
+    node.parentNode.replaceChild(fragment, node);
+  });
+}
+
+function coerceRichFieldValue(raw, options = {}) {
+  const migrateLegacy = options.migrateLegacy !== false;
+  const value = String(raw || "");
+  if (!value.trim()) {
+    return "";
+  }
+  if (isRichHtmlStoredValue(value)) {
+    const decoded = decodeStoredRichHtml(value);
+    if (!migrateLegacy) {
+      return serializeRichEditableContent(decoded);
+    }
+    const root = document.createElement("div");
+    root.innerHTML = normalizeRichEditableHtml(decoded);
+    expandLegacyInlineSyntaxInElement(root);
+    return serializeRichEditableContent(root.innerHTML);
+  }
+  if (migrateLegacy && (containsLegacyInlineSyntax(value) || hasMarkdownSyntax(value))) {
+    return serializeRichEditableContent(renderMarkdown(value));
+  }
+  return serializeRichEditableContent(plainTextToParagraphsHtml(value));
+}
+
+function getInlineTextColorToken(element) {
+  if (!(element instanceof Element)) {
+    return "";
+  }
+  const dataColor = sanitizeCssColor(element.getAttribute("data-md-color"), "");
+  if (dataColor) {
+    return dataColor;
+  }
+  const inlineStyle = element.getAttribute("style") || "";
+  const styleColor = extractStylePropertyValue(inlineStyle, "color");
+  const attrColor = element.getAttribute("color") || "";
+  const color = extractColorTokenFromCssValue(styleColor || attrColor);
+  return color || "";
+}
+
+function elementHasUnderlineDecoration(element) {
+  if (!(element instanceof Element)) {
+    return false;
+  }
+  const tag = element.tagName.toLowerCase();
+  if (tag === "u") {
+    return true;
+  }
+  const inlineStyle = element.getAttribute("style") || "";
+  const textDecoration = extractStylePropertyValue(inlineStyle, "text-decoration");
+  const textDecorationLine = extractStylePropertyValue(inlineStyle, "text-decoration-line");
+  const source = `${textDecoration} ${textDecorationLine}`.toLowerCase();
+  return source.includes("underline");
+}
+
+function getInlineUnderlineColorToken(element) {
+  if (!(element instanceof Element)) {
+    return "";
+  }
+  const dataColor = sanitizeCssColor(element.getAttribute("data-md-underline"), "");
+  if (dataColor) {
+    return dataColor;
+  }
+  const inlineStyle = element.getAttribute("style") || "";
+  const decorationColor = extractStylePropertyValue(inlineStyle, "text-decoration-color");
+  const decorationShorthand = extractStylePropertyValue(inlineStyle, "text-decoration");
+  const fallbackColor = extractStylePropertyValue(inlineStyle, "color");
+  const parsedDecorationColor = extractColorTokenFromCssValue(decorationColor || decorationShorthand);
+  const color = sanitizeCssColor(parsedDecorationColor || fallbackColor, "currentColor");
+  return color || "currentColor";
+}
+
+function getInlineHighlightColorToken(element) {
+  if (!(element instanceof Element)) {
+    return "";
+  }
+  const dataColor = sanitizeCssColor(element.getAttribute("data-md-highlight"), "");
+  if (dataColor) {
+    return dataColor;
+  }
+  const inlineStyle = element.getAttribute("style") || "";
+  const styleBackgroundColor = extractStylePropertyValue(inlineStyle, "background-color");
+  const styleBackground = extractStylePropertyValue(inlineStyle, "background");
+  const attrBackground = element.getAttribute("bgcolor") || "";
+  const parsedBackgroundColor = extractColorTokenFromCssValue(styleBackgroundColor || styleBackground || attrBackground);
+  const color = sanitizeCssColor(parsedBackgroundColor, "");
+  return color || "";
+}
+
+function rangeMatchesElementContent(range, element) {
+  if (!(range instanceof Range) || !(element instanceof Element)) {
+    return false;
+  }
+  const selectedText = String(range.toString() || "").trim();
+  const elementText = String(element.textContent || "").trim();
+  if (selectedText && elementText && selectedText === elementText) {
+    return true;
+  }
+  const elementRange = document.createRange();
+  elementRange.selectNodeContents(element);
+  const startsEqual = range.compareBoundaryPoints(Range.START_TO_START, elementRange) === 0;
+  const endsEqual = range.compareBoundaryPoints(Range.END_TO_END, elementRange) === 0;
+  elementRange.detach?.();
+  return startsEqual && endsEqual;
+}
+
+function findStyledAncestorForSelection(target, predicate) {
+  const range = getActiveSelectionRangeForRichTarget(target);
+  if (!range || range.collapsed) {
+    return null;
+  }
+  let node = range.commonAncestorContainer;
+  if (node.nodeType === Node.TEXT_NODE) {
+    node = node.parentElement;
+  }
+  let current = node instanceof Element ? node : null;
+  while (current && current !== target) {
+    if (predicate(current) && rangeMatchesElementContent(range, current)) {
+      return current;
+    }
+    current = current.parentElement;
+  }
+  return null;
+}
+
+function unwrapElementKeepChildren(element) {
+  if (!(element instanceof Element) || !element.parentNode) {
+    return;
+  }
+  const parent = element.parentNode;
+  while (element.firstChild) {
+    parent.insertBefore(element.firstChild, element);
+  }
+  parent.removeChild(element);
+}
+
+function richInlineNodeToMarkdown(node, inheritedStyles = { color: "", underline: "", highlight: "" }) {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return String(node.textContent || "").replace(/\u00a0/g, " ");
+  }
+  if (node.nodeType !== Node.ELEMENT_NODE) {
+    return "";
+  }
+  const element = node;
+  const tag = element.tagName.toLowerCase();
+  const ownColor = getInlineTextColorToken(element);
+  const hasOwnUnderline = elementHasUnderlineDecoration(element);
+  const ownUnderline = hasOwnUnderline ? getInlineUnderlineColorToken(element) : "";
+  const ownHighlight = getInlineHighlightColorToken(element);
+  const nextInherited = {
+    color: ownColor || inheritedStyles.color || "",
+    underline: ownUnderline || inheritedStyles.underline || "",
+    highlight: ownHighlight || inheritedStyles.highlight || "",
+  };
+  const inner = Array.from(element.childNodes)
+    .map((child) => richInlineNodeToMarkdown(child, nextInherited))
+    .join("");
+  if (tag === "br") {
+    return "\n";
+  }
+  let value = inner;
+  if (tag === "strong" || tag === "b") {
+    value = `**${value}**`;
+  }
+  if (tag === "em" || tag === "i") {
+    value = `*${value}*`;
+  }
+  if (tag === "code") {
+    value = `\`${value}\``;
+  }
+  if (tag === "a") {
+    const href = element.getAttribute("href") || "";
+    const label = value || href;
+    value = href ? `[${label}](${href})` : label;
+  }
+
+  const hasHighlightChange = Boolean(ownHighlight) && normalizeColorTokenKey(ownHighlight) !== normalizeColorTokenKey(inheritedStyles.highlight);
+  const ownUnderlineToken = ownUnderline || "currentColor";
+  const hasUnderlineChange =
+    Boolean(hasOwnUnderline) && normalizeColorTokenKey(ownUnderlineToken) !== normalizeColorTokenKey(inheritedStyles.underline || "");
+  const hasColorChange = Boolean(ownColor) && normalizeColorTokenKey(ownColor) !== normalizeColorTokenKey(inheritedStyles.color);
+
+  if (hasHighlightChange) {
+    value = `{{bg:${ownHighlight}|${value}}}`;
+  }
+  if (hasColorChange) {
+    value = `{{c:${ownColor}|${value}}}`;
+  }
+  if (hasUnderlineChange) {
+    value = `{{u:${ownUnderlineToken}|${value}}}`;
+  }
+  return value;
+}
+
+function richBlockNodeToMarkdown(node) {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return String(node.textContent || "").replace(/\u00a0/g, " ").trim();
+  }
+  if (node.nodeType !== Node.ELEMENT_NODE) {
+    return "";
+  }
+  const element = node;
+  const tag = element.tagName.toLowerCase();
+  if (tag === "ul") {
+    const items = Array.from(element.children)
+      .filter((child) => child.tagName && child.tagName.toLowerCase() === "li")
+      .map((li) => `- ${Array.from(li.childNodes).map((child) => richInlineNodeToMarkdown(child)).join("").trim()}`)
+      .filter(Boolean);
+    return items.join("\n");
+  }
+  if (tag === "ol") {
+    const items = Array.from(element.children)
+      .filter((child) => child.tagName && child.tagName.toLowerCase() === "li")
+      .map((li, index) => `${index + 1}. ${Array.from(li.childNodes).map((child) => richInlineNodeToMarkdown(child)).join("").trim()}`)
+      .filter(Boolean);
+    return items.join("\n");
+  }
+  if (tag === "blockquote") {
+    const quoteText = Array.from(element.childNodes).map((child) => richInlineNodeToMarkdown(child)).join("").trim();
+    if (!quoteText) {
+      return "";
+    }
+    return quoteText
+      .split(/\r?\n/)
+      .map((line) => `> ${line}`)
+      .join("\n");
+  }
+  if (tag === "h1") {
+    return `# ${Array.from(element.childNodes).map((child) => richInlineNodeToMarkdown(child)).join("").trim()}`;
+  }
+  if (tag === "h2") {
+    return `## ${Array.from(element.childNodes).map((child) => richInlineNodeToMarkdown(child)).join("").trim()}`;
+  }
+  if (tag === "h3" || tag === "h4" || tag === "h5" || tag === "h6") {
+    return `### ${Array.from(element.childNodes).map((child) => richInlineNodeToMarkdown(child)).join("").trim()}`;
+  }
+  return Array.from(element.childNodes).map((child) => richInlineNodeToMarkdown(child)).join("").trim();
+}
+
+function richHtmlToMarkdown(html) {
+  const root = document.createElement("div");
+  root.innerHTML = String(html || "");
+  const blocks = Array.from(root.childNodes)
+    .map((node) => richBlockNodeToMarkdown(node))
+    .map((value) => String(value || "").trimEnd())
+    .filter(Boolean);
+  return blocks.join("\n\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function getCaretOffsetWithin(element) {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) {
+    return null;
+  }
+  const range = selection.getRangeAt(0);
+  if (!element.contains(range.startContainer)) {
+    return null;
+  }
+  const preRange = range.cloneRange();
+  preRange.selectNodeContents(element);
+  preRange.setEnd(range.startContainer, range.startOffset);
+  return preRange.toString().length;
+}
+
+function setCaretOffsetWithin(element, offset) {
+  const selection = window.getSelection();
+  if (!selection) {
+    return;
+  }
+  let remaining = Math.max(0, Number(offset) || 0);
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  let textNode = walker.nextNode();
+  while (textNode) {
+    const length = String(textNode.textContent || "").length;
+    if (remaining <= length) {
+      const range = document.createRange();
+      range.setStart(textNode, remaining);
+      range.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      return;
+    }
+    remaining -= length;
+    textNode = walker.nextNode();
+  }
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  range.collapse(false);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function renderMarkdownInlineBasic(raw) {
+  let text = escapeHtml(raw);
+  const codeTokens = [];
+  text = text.replace(/`([^`]+)`/g, (_match, code) => {
+    const token = `%%CODETOKEN${codeTokens.length}%%`;
+    codeTokens.push(`<code>${code}</code>`);
+    return token;
+  });
+  text = text.replace(
+    /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/gi,
+    '<a href="$2" target="_blank" rel="noreferrer">$1</a>'
+  );
+  text = text.replace(/(\*\*|__)([\s\S]+?)\1/g, (_match, _marker, content) => `<strong>${content}</strong>`);
+  text = text.replace(/(^|[^*])\*([^*]+?)\*(?!\*)/g, (_match, prefix, content) => `${prefix}<em>${content}</em>`);
+  text = text.replace(/(^|[^_])_([^_]+?)_(?!_)/g, (_match, prefix, content) => `${prefix}<em>${content}</em>`);
+  text = text.replace(/%%CODETOKEN(\d+)%%/g, (_match, index) => codeTokens[Number(index)] || "");
+  return text;
+}
+
+function parseCustomInlineToken(source, startIndex) {
+  if (!String(source).startsWith("{{", startIndex)) {
+    return null;
+  }
+  const colonIndex = source.indexOf(":", startIndex + 2);
+  if (colonIndex === -1) {
+    return null;
+  }
+  const type = source.slice(startIndex + 2, colonIndex).trim().toLowerCase();
+  if (!["bg", "c", "u"].includes(type)) {
+    return null;
+  }
+  const pipeIndex = source.indexOf("|", colonIndex + 1);
+  if (pipeIndex === -1) {
+    return null;
+  }
+  const colorRaw = source.slice(colonIndex + 1, pipeIndex).trim();
+  let depth = 1;
+  let cursor = pipeIndex + 1;
+  while (cursor < source.length) {
+    if (source.startsWith("{{", cursor)) {
+      depth += 1;
+      cursor += 2;
+      continue;
+    }
+    if (source.startsWith("}}", cursor)) {
+      depth -= 1;
+      if (depth === 0) {
+        return {
+          type,
+          colorRaw,
+          contentRaw: source.slice(pipeIndex + 1, cursor),
+          endIndex: cursor + 2,
+        };
+      }
+      cursor += 2;
+      continue;
+    }
+    cursor += 1;
+  }
+  return null;
+}
+
+function renderCustomInlineToken(token) {
+  const innerHtml = renderMarkdownInline(token.contentRaw);
+  if (token.type === "bg") {
+    const color = sanitizeCssColor(token.colorRaw, "");
+    if (!color) {
+      return innerHtml;
+    }
+    return `<mark data-md-highlight="${escapeAttribute(color)}" style="background-color: ${escapeAttribute(color)};">${innerHtml}</mark>`;
+  }
+  if (token.type === "c") {
+    const color = sanitizeCssColor(token.colorRaw, "");
+    if (!color) {
+      return innerHtml;
+    }
+    return `<span data-md-color="${escapeAttribute(color)}" style="color: ${escapeAttribute(color)};">${innerHtml}</span>`;
+  }
+  if (token.type === "u") {
+    const color = sanitizeCssColor(token.colorRaw, "currentColor");
+    return `<span data-md-underline="${escapeAttribute(color)}" style="text-decoration-line: underline; text-decoration-color: ${escapeAttribute(color)};">${innerHtml}</span>`;
+  }
+  return innerHtml;
+}
+
+function renderMarkdownInline(raw) {
+  const source = String(raw || "");
+  if (!source) {
+    return "";
+  }
+  let html = "";
+  let plainBuffer = "";
+  const flushPlain = () => {
+    if (!plainBuffer) {
+      return;
+    }
+    html += renderMarkdownInlineBasic(plainBuffer);
+    plainBuffer = "";
+  };
+  let cursor = 0;
+  while (cursor < source.length) {
+    const token = parseCustomInlineToken(source, cursor);
+    if (token) {
+      flushPlain();
+      html += renderCustomInlineToken(token);
+      cursor = token.endIndex;
+      continue;
+    }
+    plainBuffer += source[cursor];
+    cursor += 1;
+  }
+  flushPlain();
+  return html;
+}
+
+function hasMarkdownSyntax(raw) {
+  const text = String(raw || "");
+  if (!text.trim()) {
+    return false;
+  }
+  return /(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^\s)]+\)|(^|\n)\s{0,3}(#{1,3}|> |- ))/.test(text);
+}
+
+function buildMarkdownPreviewHtml(raw) {
+  const text = String(raw || "");
+  if (!text.trim()) {
+    return "";
+  }
+  if (isRichHtmlStoredValue(text)) {
+    return normalizeRichEditableHtml(decodeStoredRichHtml(text));
+  }
+  return plainTextToParagraphsHtml(text);
+}
+
+function setMarkdownPreviewContent(element, raw, emptyLabel = "Sin notas") {
+  if (!(element instanceof HTMLElement)) {
+    return;
+  }
+  const html = buildMarkdownPreviewHtml(raw);
+  if (isRichMarkdownEditableTarget(element)) {
+    element.innerHTML = html || "";
+  } else {
+    element.innerHTML = html || `<p class="empty-side">${escapeHtml(emptyLabel)}.</p>`;
+  }
+  element.classList.remove("hidden");
 }
 
 function createId() {
@@ -5579,9 +10319,11 @@ async function flushPendingAutosaves() {
       if (!tutorialId || !blockId || !field) {
         return;
       }
-      const selector = `[data-extra-block-note-id="${blockId}"][data-extra-block-tutorial-id="${tutorialId}"]`;
+      const selector =
+        `[data-extra-block-field="${field}"][data-extra-block-tutorial-id="${tutorialId}"][data-extra-block-id="${blockId}"], ` +
+        `[data-extra-block-field="${field}"][data-extra-block-tutorial-id="${tutorialId}"][data-extra-block-note-id="${blockId}"]`;
       const editor = refs.detailPanel.querySelector(selector);
-      if (editor instanceof HTMLTextAreaElement) {
+      if (editor instanceof HTMLInputElement || editor instanceof HTMLTextAreaElement || editor instanceof HTMLSelectElement) {
         tasks.push(saveExtraBlockField(tutorialId, blockId, field, editor.value));
       }
     });
@@ -5621,27 +10363,113 @@ async function flushPendingAutosaves() {
   }
 }
 
-async function refreshTutorials() {
+function buildTutorialsSignature(list) {
+  if (!Array.isArray(list) || !list.length) {
+    return "";
+  }
+  return list
+    .map((item) => {
+      const id = String(item?.id || "").trim();
+      const updatedAt = String(item?.updatedAt || item?.updated_at || "").trim();
+      return `${id}:${updatedAt}`;
+    })
+    .sort()
+    .join("|");
+}
+
+async function applyTutorialListFromServer(apiTutorials) {
+  const normalizedPairs = (Array.isArray(apiTutorials) ? apiTutorials : []).map((rawTutorial) => ({
+    rawTutorial,
+    normalized: normalizeTutorial(rawTutorial),
+  }));
+  const nextTutorials = normalizedPairs.map((pair) => pair.normalized);
+  const nextSignature = buildTutorialsSignature(nextTutorials);
+  if (nextSignature === state.tutorialsSignature) {
+    return false;
+  }
+  state.tutorials = nextTutorials;
+  state.tutorialsSignature = nextSignature;
+  await persistRichContentMigrationIfNeeded(normalizedPairs);
+  pruneSelection();
+  if (!state.selectedId || !state.tutorials.some((t) => t.id === state.selectedId)) {
+    state.selectedId = state.tutorials[0]?.id || null;
+  }
+  if (state.page === "tutorial" && !state.selectedId) {
+    state.page = "library";
+  }
+  syncRouteToLocation(true);
+  checkAndNotifyReminders();
+  return true;
+}
+
+async function refreshTutorials(options = {}) {
   if (!state.currentUser) {
     return;
   }
-  setSyncStatus("Sincronizando con el servidor...");
+  const silent = Boolean(options?.silent);
+  if (!silent) {
+    setSyncStatus("Sincronizando con el servidor...");
+  }
   try {
-    state.tutorials = (await apiListTutorials()).map(normalizeTutorial);
-    pruneSelection();
-    if (!state.selectedId || !state.tutorials.some((t) => t.id === state.selectedId)) {
-      state.selectedId = state.tutorials[0]?.id || null;
+    const apiTutorials = await apiListTutorials();
+    await applyTutorialListFromServer(apiTutorials);
+    if (!silent) {
+      setSyncStatus(`Sincronizado · ${new Date().toLocaleTimeString("es-BO", { hour: "2-digit", minute: "2-digit" })}`);
     }
-    if (state.page === "tutorial" && !state.selectedId) {
-      state.page = "library";
-    }
-    syncRouteToLocation(true);
-    setSyncStatus(`Sincronizado · ${new Date().toLocaleTimeString("es-BO", { hour: "2-digit", minute: "2-digit" })}`);
-    checkAndNotifyReminders();
   } catch (error) {
-    setSyncStatus(resolveError(error, "No se pudo conectar con el backend."), true);
+    if (!silent) {
+      setSyncStatus(resolveError(error, "No se pudo conectar con el backend."), true);
+    }
   } finally {
+    syncStorageSettingsUi();
     render();
+  }
+}
+
+async function persistRichContentMigrationIfNeeded(pairs) {
+  if (!Array.isArray(pairs) || !pairs.length) {
+    return;
+  }
+  const updates = pairs.filter(({ rawTutorial, normalized }) => {
+    if (!rawTutorial || !normalized) {
+      return false;
+    }
+    const rawNotes = typeof rawTutorial.notes === "string" ? rawTutorial.notes : "";
+    const rawTextContent = typeof rawTutorial.textContent === "string" ? rawTutorial.textContent : "";
+    const rawExtra = normalizeExtraContentBlocks(rawTutorial.extraContent, resolveTutorialNotesSide(normalized));
+    if (String(rawNotes) !== String(normalized.notes || "")) {
+      return true;
+    }
+    if (String(rawTextContent) !== String(normalized.textContent || "")) {
+      return true;
+    }
+    if (JSON.stringify(rawExtra) !== JSON.stringify(normalized.extraContent || [])) {
+      return true;
+    }
+    return false;
+  });
+
+  if (!updates.length) {
+    return;
+  }
+
+  for (const { normalized } of updates) {
+    try {
+      const payload = {
+        ...normalized,
+        updatedAt: new Date().toISOString(),
+      };
+      await apiUpdateTutorial(normalized.id, payload);
+      const local = state.tutorials.find((item) => item.id === normalized.id);
+      if (local) {
+        local.notes = payload.notes;
+        local.textContent = payload.textContent;
+        local.extraContent = payload.extraContent;
+        local.updatedAt = payload.updatedAt;
+      }
+    } catch (error) {
+      console.warn("No se pudo persistir migracion rich para", normalized.id, error);
+    }
   }
 }
 
@@ -5655,7 +10483,7 @@ function normalizeTimestampEntries(value) {
     .filter(Boolean);
 }
 
-function normalizeExtraContentBlocks(value) {
+function normalizeExtraContentBlocks(value, noteSideFallback = state.notesSide) {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -5670,21 +10498,22 @@ function normalizeExtraContentBlocks(value) {
       }
       const id = typeof item.id === "string" && item.id ? item.id : createId();
       const caption = typeof item.caption === "string" ? item.caption : "";
-      const note = typeof item.note === "string" ? item.note : "";
+      const note = coerceRichFieldValue(typeof item.note === "string" ? item.note : "");
+      const noteSide = normalizeNoteSide(item.noteSide, noteSideFallback);
       const createdAt = typeof item.createdAt === "string" ? item.createdAt : new Date().toISOString();
       if (type === "text") {
-        const text = typeof item.text === "string" ? item.text : "";
+        const text = coerceRichFieldValue(typeof item.text === "string" ? item.text : "");
         if (!text.trim()) {
           return null;
         }
-        return { id, type, text, caption, note, createdAt };
+        return { id, type, text, caption, note, noteSide, createdAt };
       }
       const url = typeof item.url === "string" ? item.url : "";
       if (!url.trim()) {
         return null;
       }
       const timestamps = type === "video" ? normalizeTimestampEntries(item.timestamps) : [];
-      return { id, type, url, caption, note, timestamps, createdAt };
+      return { id, type, url, caption, note, noteSide, timestamps, createdAt };
     })
     .filter(Boolean)
     .slice(0, 60);
@@ -5692,6 +10521,7 @@ function normalizeExtraContentBlocks(value) {
 
 function normalizeTutorial(item) {
   const now = new Date().toISOString();
+  const notesSide = normalizeNoteSide(item.notesSide, state.notesSide);
   return {
     id: typeof item.id === "string" ? item.id : createId(),
     title: typeof item.title === "string" && item.title.trim() ? item.title.trim() : "Sin titulo",
@@ -5700,7 +10530,7 @@ function normalizeTutorial(item) {
     url: typeof item.url === "string" ? item.url : "",
     normalizedUrl: normalizeUrl(typeof item.url === "string" ? item.url : ""),
     imageUrl: typeof item.imageUrl === "string" ? item.imageUrl : "",
-    textContent: typeof item.textContent === "string" ? item.textContent : "",
+    textContent: coerceRichFieldValue(typeof item.textContent === "string" ? item.textContent : ""),
     category: typeof item.category === "string" ? item.category : "",
     collection: typeof item.collection === "string" ? item.collection : "",
     status: STATUS_ORDER.includes(item.status) ? item.status : "Por ver",
@@ -5708,9 +10538,12 @@ function normalizeTutorial(item) {
     isFavorite: Boolean(item.isFavorite),
     reviewDate: typeof item.reviewDate === "string" ? item.reviewDate : "",
     tags: Array.isArray(item.tags) ? item.tags.filter((tag) => typeof tag === "string") : [],
-    notes: typeof item.notes === "string" ? item.notes : "",
+    notes: coerceRichFieldValue(typeof item.notes === "string" ? item.notes : ""),
     timestamps: Array.isArray(item.timestamps) ? item.timestamps.filter((entry) => typeof entry === "string") : [],
-    extraContent: normalizeExtraContentBlocks(item.extraContent),
+    emoji: normalizeEmoji(item.emoji),
+    emojiColor: normalizeEmojiColor(item.emojiColor, "default"),
+    notesSide,
+    extraContent: normalizeExtraContentBlocks(item.extraContent, notesSide),
     createdAt: typeof item.createdAt === "string" ? item.createdAt : now,
     updatedAt: typeof item.updatedAt === "string" ? item.updatedAt : now,
   };
@@ -5834,6 +10667,10 @@ async function apiAuthMe() {
   return requestJson(`${API_BASE}/auth/me`);
 }
 
+async function apiClientConfig() {
+  return requestJson(`${API_BASE}/client-config`);
+}
+
 async function apiRegister(email, password) {
   return requestJson(`${API_BASE}/auth/register`, { method: "POST", body: { email, password } });
 }
@@ -5878,10 +10715,47 @@ async function apiDeleteSavedView(id) {
   return requestJson(`${API_BASE}/saved-views/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
-function apiUploadFile(file, onProgress) {
+async function apiGetSettings() {
+  return requestJson(`${API_BASE}/settings`);
+}
+
+async function apiUpdateSettings(payload) {
+  return requestJson(`${API_BASE}/settings`, { method: "PUT", body: payload });
+}
+
+async function apiCreateLocalFolder(pathValue) {
+  return requestJson(`${API_BASE}/settings/local-folder`, { method: "POST", body: { path: pathValue } });
+}
+
+async function apiPickFolder(description = "") {
+  return requestJson(`${API_BASE}/settings/pick-folder`, { method: "POST", body: { description } });
+}
+
+async function apiConnectCloudProvider(provider, accountName) {
+  return requestJson(`${API_BASE}/settings/cloud/connect`, {
+    method: "POST",
+    body: {
+      provider,
+      accountName,
+    },
+  });
+}
+
+async function apiDisconnectCloudProvider() {
+  return requestJson(`${API_BASE}/settings/cloud/disconnect`, { method: "POST" });
+}
+
+async function apiRunStorageSync() {
+  return requestJson(`${API_BASE}/sync/run`, { method: "POST" });
+}
+
+function apiUploadFile(file, onProgress, options = {}) {
   return new Promise((resolve, reject) => {
     const payload = new FormData();
     payload.append("file", file);
+    if (options && typeof options === "object" && typeof options.tutorialId === "string" && options.tutorialId.trim()) {
+      payload.append("tutorialId", options.tutorialId.trim());
+    }
 
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API_BASE}/uploads`, true);

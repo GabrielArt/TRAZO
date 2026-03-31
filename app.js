@@ -166,6 +166,7 @@ let activeMarkdownTarget = null;
 let recentEmojiSymbols = loadRecentEmojiSymbols();
 let wasCompactSidebarViewport = false;
 let sidebarAutoCollapsed = false;
+let authRequestInFlight = false;
 const extraBlockAutosaveTimers = new Map();
 const tutorialEditorAutosaveTimers = new Map();
 
@@ -972,6 +973,24 @@ function setAuthMessage(message, isError) {
   refs.authMessage.classList.toggle("is-error", isError);
 }
 
+function setAuthFormsBusy(isBusy) {
+  const busy = Boolean(isBusy);
+  const loginSubmit = refs.loginForm?.querySelector("button[type='submit']");
+  const registerSubmit = refs.registerForm?.querySelector("button[type='submit']");
+  if (loginSubmit) {
+    loginSubmit.disabled = busy;
+  }
+  if (registerSubmit) {
+    registerSubmit.disabled = busy;
+  }
+  if (refs.showLoginButton) {
+    refs.showLoginButton.disabled = busy;
+  }
+  if (refs.showRegisterButton) {
+    refs.showRegisterButton.disabled = busy;
+  }
+}
+
 function getEffectiveMaxUploadBytes() {
   const parsed = Number(state.maxUploadSizeBytes);
   if (Number.isFinite(parsed) && parsed > 0) {
@@ -1022,12 +1041,17 @@ async function refreshClientConfig() {
 }
 
 async function handleLogin() {
+  if (authRequestInFlight) {
+    return;
+  }
   const email = refs.loginForm.elements.email.value.trim();
   const password = refs.loginForm.elements.password.value;
   if (!email || !password) {
     setAuthMessage("Email y clave son obligatorios.", true);
     return;
   }
+  authRequestInFlight = true;
+  setAuthFormsBusy(true);
   setAuthMessage("Validando acceso...", false);
   try {
     const response = await apiLogin(email, password);
@@ -1041,16 +1065,24 @@ async function handleLogin() {
     syncLiveSyncLoopState();
   } catch (error) {
     setAuthMessage(resolveError(error, "No se pudo iniciar sesion."), true);
+  } finally {
+    authRequestInFlight = false;
+    setAuthFormsBusy(false);
   }
 }
 
 async function handleRegister() {
+  if (authRequestInFlight) {
+    return;
+  }
   const email = refs.registerForm.elements.email.value.trim();
   const password = refs.registerForm.elements.password.value;
   if (!email || !password) {
     setAuthMessage("Email y clave son obligatorios.", true);
     return;
   }
+  authRequestInFlight = true;
+  setAuthFormsBusy(true);
   setAuthMessage("Creando cuenta...", false);
   try {
     const response = await apiRegister(email, password);
@@ -1064,6 +1096,9 @@ async function handleRegister() {
     syncLiveSyncLoopState();
   } catch (error) {
     setAuthMessage(resolveError(error, "No se pudo crear la cuenta."), true);
+  } finally {
+    authRequestInFlight = false;
+    setAuthFormsBusy(false);
   }
 }
 
@@ -10804,10 +10839,10 @@ async function requestJson(url, options = {}) {
     init.body = JSON.stringify(options.body);
   }
 
-  const isAuthEndpoint = /\/auth\/(me|login|register|logout)$/i.test(url);
-  const shouldRetry =
-    method === "GET" || isAuthEndpoint;
-  const maxAttempts = shouldRetry ? (isAuthEndpoint ? 6 : 2) : 1;
+  const isAuthMeEndpoint = /\/auth\/me$/i.test(url);
+  const isAuthMutationEndpoint = /\/auth\/(login|register|logout)$/i.test(url);
+  const shouldRetryByMethod = method === "GET";
+  const maxAttempts = isAuthMeEndpoint ? 6 : shouldRetryByMethod || isAuthMutationEndpoint ? 2 : 1;
   let lastNetworkError = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -10816,9 +10851,15 @@ async function requestJson(url, options = {}) {
       const body = await readResponseBody(response);
 
       if (!response.ok) {
-        const isRetryableStatus = response.status === 502 || response.status === 503 || response.status === 504;
+        const isRetryableStatus =
+          response.status === 408 ||
+          response.status === 425 ||
+          response.status === 429 ||
+          response.status === 502 ||
+          response.status === 503 ||
+          response.status === 504;
         if (isRetryableStatus && attempt < maxAttempts) {
-          await waitMs(getRetryDelayMs(attempt, isAuthEndpoint));
+          await waitMs(getRetryDelayMs(attempt, isAuthMeEndpoint, response));
           continue;
         }
 
@@ -10826,14 +10867,23 @@ async function requestJson(url, options = {}) {
           setAuthenticated(null);
           setAuthMessage("Sesion expirada. Vuelve a iniciar sesion.", true);
         }
-        const message = body && typeof body === "object" && "error" in body && body.error ? body.error : `Error de red (${response.status})`;
-        throw new Error(String(message));
+        const retryAfterHeader = Number(response.headers.get("Retry-After") || 0);
+        const message =
+          body && typeof body === "object" && "error" in body && body.error
+            ? body.error
+            : response.status === 429 && retryAfterHeader > 0
+              ? `Demasiados intentos. Espera ${retryAfterHeader}s e intenta nuevamente.`
+              : `Error de red (${response.status})`;
+        throw createRequestError(String(message), {
+          status: response.status,
+          retryable: isRetryableStatus,
+        });
       }
       return body;
     } catch (error) {
       lastNetworkError = error;
-      if (attempt < maxAttempts) {
-        await waitMs(getRetryDelayMs(attempt, isAuthEndpoint));
+      if (attempt < maxAttempts && shouldRetryRequestError(error)) {
+        await waitMs(getRetryDelayMs(attempt, isAuthMeEndpoint));
         continue;
       }
       throw error;
@@ -10864,10 +10914,40 @@ function waitMs(ms) {
   });
 }
 
-function getRetryDelayMs(attempt, isAuthEndpoint = false) {
+function getRetryDelayMs(attempt, isAuthEndpoint = false, response = null) {
+  if (response && Number(response.status) === 429) {
+    const retryAfter = Number(response.headers.get("Retry-After") || 0);
+    if (Number.isFinite(retryAfter) && retryAfter > 0) {
+      return retryAfter * 1000;
+    }
+  }
   if (isAuthEndpoint) {
     const schedule = [1000, 2000, 4000, 6000, 8000];
     return schedule[Math.max(0, attempt - 1)] || 9000;
   }
   return 900 * Math.max(1, attempt);
+}
+
+function createRequestError(message, details = {}) {
+  const error = new Error(String(message || "Solicitud fallida."));
+  if (details && typeof details === "object") {
+    if ("status" in details) {
+      error.status = Number(details.status) || 0;
+    }
+    error.retryable = Boolean(details.retryable);
+  }
+  return error;
+}
+
+function shouldRetryRequestError(error) {
+  if (!error) {
+    return false;
+  }
+  if (error.retryable === true) {
+    return true;
+  }
+  if (typeof error.status === "number") {
+    return false;
+  }
+  return error instanceof TypeError;
 }

@@ -11,9 +11,10 @@ const execFileAsync = promisify(execFile);
 loadEnvironmentFromFile();
 
 const PORT = Number(process.env.PORT) || 3000;
-const DB_DIR = path.join(__dirname, "data");
+const APP_DATA_ROOT = resolveAppDataRoot();
+const DB_DIR = path.join(APP_DATA_ROOT, "data");
 const DB_PATH = path.join(DB_DIR, "tutorials.db");
-const UPLOAD_DIR = path.join(__dirname, "uploads");
+const UPLOAD_DIR = path.join(APP_DATA_ROOT, "uploads");
 const SESSION_COOKIE_NAME = "tv_session";
 const SESSION_DURATION_DAYS = 30;
 const MAX_UPLOAD_BYTES = readPositiveBytesEnv(process.env.MAX_UPLOAD_BYTES, 5 * 1024 * 1024 * 1024);
@@ -1808,6 +1809,17 @@ async function ensureDeviceIdForUser(userId) {
 
 function normalizeEmoji(value) {
   return asTrimmedString(value).slice(0, 8);
+}
+
+function resolveAppDataRoot() {
+  const customRoot = asTrimmedString(process.env.APP_DATA_ROOT);
+  if (customRoot) {
+    return path.resolve(customRoot);
+  }
+  if (process.env.RENDER === "true" || asTrimmedString(process.env.RENDER_SERVICE_ID)) {
+    return "/tmp/trazo";
+  }
+  return __dirname;
 }
 
 function normalizeEmojiColor(value, fallback = "default") {

@@ -10794,22 +10794,49 @@ function apiUploadFile(file, onProgress, options = {}) {
 }
 
 async function requestJson(url, options = {}) {
-  const init = { method: options.method || "GET", headers: {}, credentials: "include" };
+  const method = String(options.method || "GET").toUpperCase();
+  const init = { method, headers: {}, credentials: "include" };
   if (options.body !== undefined) {
     init.headers["Content-Type"] = "application/json";
     init.body = JSON.stringify(options.body);
   }
-  const response = await fetch(url, init);
-  const body = await readResponseBody(response);
-  if (!response.ok) {
-    if (response.status === 401 && !url.includes("/auth/")) {
-      setAuthenticated(null);
-      setAuthMessage("Sesion expirada. Vuelve a iniciar sesion.", true);
+
+  const shouldRetry =
+    method === "GET" || /\/auth\/login$/i.test(url) || /\/auth\/me$/i.test(url) || /\/auth\/logout$/i.test(url);
+  const maxAttempts = shouldRetry ? 2 : 1;
+  let lastNetworkError = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const response = await fetch(url, init);
+      const body = await readResponseBody(response);
+
+      if (!response.ok) {
+        const isRetryableStatus = response.status === 502 || response.status === 503 || response.status === 504;
+        if (isRetryableStatus && attempt < maxAttempts) {
+          await waitMs(900 * attempt);
+          continue;
+        }
+
+        if (response.status === 401 && !url.includes("/auth/")) {
+          setAuthenticated(null);
+          setAuthMessage("Sesion expirada. Vuelve a iniciar sesion.", true);
+        }
+        const message = body && typeof body === "object" && "error" in body && body.error ? body.error : `Error de red (${response.status})`;
+        throw new Error(String(message));
+      }
+      return body;
+    } catch (error) {
+      lastNetworkError = error;
+      if (attempt < maxAttempts) {
+        await waitMs(900 * attempt);
+        continue;
+      }
+      throw error;
     }
-    const message = body && typeof body === "object" && "error" in body && body.error ? body.error : `Error de red (${response.status})`;
-    throw new Error(String(message));
   }
-  return body;
+
+  throw lastNetworkError || new Error("No se pudo completar la solicitud.");
 }
 
 async function readResponseBody(response) {
@@ -10825,4 +10852,10 @@ async function readResponseBody(response) {
   } catch {
     return text;
   }
+}
+
+function waitMs(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, Math.max(0, Number(ms) || 0));
+  });
 }

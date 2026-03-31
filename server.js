@@ -1528,11 +1528,12 @@ function defaultUserSettings(userId) {
 function sanitizeUserSettingsPayload(raw, current = null) {
   const value = raw && typeof raw === "object" ? raw : {};
   const fallback = current || defaultUserSettings("");
-  const storageMode = normalizeStorageMode(value.storageMode, fallback.storageMode);
+  let storageMode = normalizeStorageMode(value.storageMode, fallback.storageMode);
   const cloudProvider = normalizeCloudProvider(value.cloudProvider, fallback.cloudProvider);
   const localRootPath = asTrimmedString(value.localRootPath).slice(0, 500);
   const cloudRootPath = asTrimmedString(value.cloudRootPath).slice(0, 500);
   const syncTutorialIds = normalizeIdArray(value.syncTutorialIds);
+  const cloudEnabled = asBoolean(value.cloudEnabled);
   let cloudAccountName = sanitizeCloudAccountName(value.cloudAccountName || fallback.cloudAccountName);
   let cloudConnected = asBoolean(fallback.cloudConnected);
   let cloudConnectedAt = asTrimmedString(fallback.cloudConnectedAt);
@@ -1545,12 +1546,15 @@ function sanitizeUserSettingsPayload(raw, current = null) {
   if (cloudProvider === "none") {
     cloudAccountName = "";
   }
+  if (cloudProvider === "supabase" && cloudEnabled && storageMode === "device") {
+    storageMode = "hybrid";
+  }
   return {
     storageMode,
     localRootPath,
     cloudRootPath,
     cloudProvider,
-    cloudEnabled: asBoolean(value.cloudEnabled),
+    cloudEnabled,
     cloudConnected,
     cloudAccountName,
     cloudConnectedAt,
@@ -2489,7 +2493,19 @@ function canSyncToLocalStorage(settings) {
   return settings.storageMode === "device" || settings.storageMode === "hybrid";
 }
 
+function isSupabaseTunnelEnabled(settings) {
+  return (
+    settings &&
+    settings.cloudProvider === "supabase" &&
+    settings.cloudEnabled &&
+    settings.cloudConnected
+  );
+}
+
 function canSyncToCloudStorage(settings) {
+  if (isSupabaseTunnelEnabled(settings)) {
+    return true;
+  }
   return (
     (settings.storageMode === "cloud" || settings.storageMode === "hybrid") &&
     settings.cloudEnabled &&
@@ -2592,6 +2608,96 @@ function syncTutorialToRoot(rootPath, userId, tutorial) {
   };
   fs.writeFileSync(path.join(tutorialDir, "tutorial.json"), JSON.stringify(tutorialExport, null, 2), "utf8");
   return true;
+}
+
+function resolveMirroredAssetPath(asset, tutorialDir) {
+  const directPath = asTrimmedString(asset?.path);
+  if (directPath) {
+    const absolute = path.isAbsolute(directPath) ? directPath : path.resolve(tutorialDir, directPath);
+    if (fs.existsSync(absolute)) {
+      return absolute;
+    }
+  }
+  const fileName = safePathSegment(asset?.fileName);
+  if (fileName) {
+    const fallback = path.join(tutorialDir, "assets", fileName);
+    if (fs.existsSync(fallback)) {
+      return fallback;
+    }
+  }
+  return "";
+}
+
+function hydrateTutorialFromLocalBackup(rawTutorial, tutorialDir) {
+  const mirroredAssets = Array.isArray(rawTutorial?.mirroredAssets) ? rawTutorial.mirroredAssets : [];
+  if (!mirroredAssets.length) {
+    return rawTutorial;
+  }
+  const assetMap = new Map();
+  for (const asset of mirroredAssets) {
+    const sourceUrl = asTrimmedString(asset?.sourceUrl);
+    if (!sourceUrl) {
+      continue;
+    }
+    const sourcePath = resolveMirroredAssetPath(asset, tutorialDir);
+    if (!sourcePath) {
+      continue;
+    }
+    const ext = sanitizeExtension(path.basename(sourcePath));
+    const fileName = `${Date.now()}-${crypto.randomBytes(10).toString("hex")}${ext}`;
+    const destination = path.join(UPLOAD_DIR, fileName);
+    fs.copyFileSync(sourcePath, destination);
+    assetMap.set(sourceUrl, `/uploads/${fileName}`);
+  }
+  return remapTutorialMediaUrls(rawTutorial, (sourceUrl) => assetMap.get(sourceUrl) || sourceUrl);
+}
+
+async function pullTutorialsFromLocalRoot(rootPath, userId, currentTutorials) {
+  const result = {
+    downloaded: 0,
+    errors: 0,
+    downloadedIds: new Set(),
+    messages: [],
+  };
+  const resolvedRoot = resolveStoragePath(rootPath);
+  if (!resolvedRoot) {
+    return result;
+  }
+  const userFolder = path.join(resolvedRoot, safePathSegment(userId));
+  if (!fs.existsSync(userFolder)) {
+    return result;
+  }
+  const localMap = new Map((Array.isArray(currentTutorials) ? currentTutorials : []).map((item) => [item.id, item]));
+  const folders = fs.readdirSync(userFolder, { withFileTypes: true }).filter((entry) => entry.isDirectory());
+  for (const folder of folders) {
+    const tutorialDir = path.join(userFolder, folder.name);
+    const tutorialJsonPath = path.join(tutorialDir, "tutorial.json");
+    if (!fs.existsSync(tutorialJsonPath)) {
+      continue;
+    }
+    try {
+      const raw = JSON.parse(fs.readFileSync(tutorialJsonPath, "utf8"));
+      const hydrated = hydrateTutorialFromLocalBackup(raw, tutorialDir);
+      const now = new Date().toISOString();
+      const sanitized = sanitizeTutorial(hydrated, now, userId);
+      const local = localMap.get(sanitized.id);
+      if (local && resolveDateMs(local.updatedAt) >= resolveDateMs(sanitized.updatedAt)) {
+        continue;
+      }
+      if (local) {
+        await updateTutorial(sanitized);
+      } else {
+        await insertTutorial(sanitized);
+      }
+      localMap.set(sanitized.id, sanitized);
+      result.downloaded += 1;
+      result.downloadedIds.add(sanitized.id);
+    } catch (error) {
+      result.errors += 1;
+      result.messages.push(`[local-pull] ${folder.name}: ${resolveErrorMessage(error)}`);
+    }
+  }
+  return result;
 }
 
 async function maybeAutoCloudSyncOnRead(userId) {
@@ -2701,6 +2807,17 @@ async function runStorageSyncForUser(userId) {
 
   if (result.local.enabled) {
     const rootPath = resolveStoragePath(settings.localRootPath);
+    const localPullResult = await pullTutorialsFromLocalRoot(rootPath, userId, tutorials);
+    result.local.errors += localPullResult.errors;
+    if (localPullResult.messages.length) {
+      localPullResult.messages.forEach((message) => result.errors.push(message));
+    }
+    if (localPullResult.downloaded > 0) {
+      localPullResult.downloadedIds.forEach((id) => syncedIds.add(id));
+      rows = await allAsync("SELECT * FROM tutorials WHERE user_id = ?", [userId]);
+      tutorials = rows.map(fromRow);
+      result.totalTutorials = tutorials.length;
+    }
     tutorials.forEach((tutorial) => {
       try {
         if (syncTutorialToRoot(rootPath, userId, tutorial)) {

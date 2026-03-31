@@ -741,9 +741,10 @@ async function bootstrapSession() {
     const response = await apiAuthMe();
     setAuthenticated(response.user);
     setAuthMessage("", false);
+    await refreshUserSettings();
+    await runStartupSyncIfNeeded();
     await refreshTutorials();
     await refreshSavedViews();
-    await refreshUserSettings();
     startReminderLoop();
     syncLiveSyncLoopState();
   } catch {
@@ -1058,9 +1059,10 @@ async function handleLogin() {
     setAuthenticated(response.user);
     setAuthMessage("", false);
     refs.loginForm.reset();
+    await refreshUserSettings();
+    await runStartupSyncIfNeeded();
     await refreshTutorials();
     await refreshSavedViews();
-    await refreshUserSettings();
     startReminderLoop();
     syncLiveSyncLoopState();
   } catch (error) {
@@ -1089,9 +1091,10 @@ async function handleRegister() {
     setAuthenticated(response.user);
     setAuthMessage("", false);
     refs.registerForm.reset();
+    await refreshUserSettings();
+    await runStartupSyncIfNeeded();
     await refreshTutorials();
     await refreshSavedViews();
-    await refreshUserSettings();
     startReminderLoop();
     syncLiveSyncLoopState();
   } catch (error) {
@@ -1099,6 +1102,30 @@ async function handleRegister() {
   } finally {
     authRequestInFlight = false;
     setAuthFormsBusy(false);
+  }
+}
+
+async function runStartupSyncIfNeeded() {
+  if (!state.currentUser) {
+    return;
+  }
+  const settings = normalizeUserSettings(state.userSettings);
+  const hasLocalConfigured = Boolean(String(settings.localRootPath || "").trim());
+  const hasCloudConfigured = Boolean(
+    settings.cloudEnabled && settings.cloudConnected && String(settings.cloudProvider || "none") !== "none"
+  );
+  if (!hasLocalConfigured && !hasCloudConfigured) {
+    return;
+  }
+  try {
+    const result = await apiRunStorageSync();
+    if (result?.settings) {
+      state.userSettings = normalizeUserSettings(result.settings);
+      syncStorageSettingsUi();
+      syncLiveSyncLoopState();
+    }
+  } catch {
+    // En arranque evitamos bloquear el login por fallos transitorios de sincronizacion.
   }
 }
 

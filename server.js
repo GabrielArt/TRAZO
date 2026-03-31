@@ -1820,9 +1820,27 @@ function resolveAppDataRoot() {
     return path.resolve(customRoot);
   }
   if (process.env.RENDER === "true" || asTrimmedString(process.env.RENDER_SERVICE_ID)) {
+    const persistentRoot = "/var/data/trazo";
+    if (ensureWritableDirectory(persistentRoot)) {
+      return persistentRoot;
+    }
     return "/tmp/trazo";
   }
   return __dirname;
+}
+
+function ensureWritableDirectory(targetPath) {
+  const normalized = asTrimmedString(targetPath);
+  if (!normalized) {
+    return false;
+  }
+  try {
+    fs.mkdirSync(normalized, { recursive: true });
+    fs.accessSync(normalized, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function normalizeEmojiColor(value, fallback = "default") {

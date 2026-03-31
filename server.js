@@ -52,6 +52,8 @@ const GOOGLE_OAUTH_SCOPES = normalizeOauthScopes(process.env.GOOGLE_OAUTH_SCOPES
 const SUPABASE_URL = asTrimmedString(process.env.SUPABASE_URL);
 const SUPABASE_SERVICE_ROLE_KEY = asTrimmedString(process.env.SUPABASE_SERVICE_ROLE_KEY);
 const SUPABASE_BUCKET = normalizeSupabaseBucketId(asTrimmedString(process.env.SUPABASE_BUCKET) || "trazo-tutorials");
+const SUPABASE_APP_SNAPSHOT_OBJECT = asTrimmedString(process.env.SUPABASE_APP_SNAPSHOT_OBJECT) || "_system/app-state-v1.json";
+const APP_SNAPSHOT_SAVE_DEBOUNCE_MS = Math.max(1000, Number(process.env.APP_SNAPSHOT_SAVE_DEBOUNCE_MS) || 3000);
 const SUPABASE_AUTH_SNAPSHOT_OBJECT = asTrimmedString(process.env.SUPABASE_AUTH_SNAPSHOT_OBJECT) || "_system/auth-state-v1.json";
 const AUTH_SNAPSHOT_SAVE_DEBOUNCE_MS = Math.max(500, Number(process.env.AUTH_SNAPSHOT_SAVE_DEBOUNCE_MS) || 1500);
 const AUTO_CLOUD_SYNC_READ_MS = Number(process.env.AUTO_CLOUD_SYNC_READ_MS) || 1000;
@@ -68,6 +70,9 @@ const liveSseClientsByUser = new Map();
 let authSnapshotSaveTimer = null;
 let authSnapshotSaveInFlight = false;
 let authSnapshotSavePending = false;
+let appSnapshotSaveTimer = null;
+let appSnapshotSaveInFlight = false;
+let appSnapshotSavePending = false;
 const TEXT_MIME_TYPES = new Set(["text/plain", "text/markdown", "text/x-markdown"]);
 const TEXT_EXTENSIONS = new Set([".txt", ".md", ".markdown"]);
 const MEDIA_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".mp4", ".webm", ".mov", ".m4v", ".ogg"]);
@@ -706,6 +711,7 @@ app.post(
       "INSERT INTO saved_views (id, user_id, name, filters_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
       [view.id, view.userId, view.name, JSON.stringify(view.filters), view.createdAt, view.updatedAt]
     );
+    markAppStateSnapshotDirty("saved_view_create");
 
     res.status(201).json({
       id: view.id,
@@ -742,6 +748,7 @@ app.put(
       req.params.id,
       req.authUser.id,
     ]);
+    markAppStateSnapshotDirty("saved_view_update");
 
     res.json({
       id: req.params.id,
@@ -761,6 +768,7 @@ app.delete(
       res.status(404).json({ error: "Vista guardada no encontrada." });
       return;
     }
+    markAppStateSnapshotDirty("saved_view_delete");
     res.status(204).end();
   })
 );
@@ -956,6 +964,7 @@ async function initializeDatabase() {
   await ensureColumn("user_settings", "last_sync_summary", "TEXT NOT NULL DEFAULT '{}'");
   await ensureColumn("user_settings", "updated_at", "TEXT NOT NULL DEFAULT ''");
 
+  await restoreAppStateSnapshotFromSupabase();
   await restoreAuthStateSnapshotFromSupabase();
 
   await runAsync("CREATE INDEX IF NOT EXISTS idx_tutorials_user_updated ON tutorials (user_id, updated_at)");
@@ -970,6 +979,7 @@ async function initializeDatabase() {
   const usersCountRow = await getAsync("SELECT COUNT(1) AS count FROM users");
   if (Number(usersCountRow?.count || 0) > 0) {
     markAuthStateSnapshotDirty("startup_seed");
+    markAppStateSnapshotDirty("startup_seed");
   }
 }
 
@@ -1652,6 +1662,10 @@ function isSupabaseAuthSnapshotEnabled() {
   return isSupabaseConfigured() && Boolean(SUPABASE_AUTH_SNAPSHOT_OBJECT);
 }
 
+function isSupabaseAppSnapshotEnabled() {
+  return isSupabaseConfigured() && Boolean(SUPABASE_APP_SNAPSHOT_OBJECT);
+}
+
 function normalizeIsoTimestamp(value, fallback = "") {
   const text = asTrimmedString(value);
   if (!text) {
@@ -1781,6 +1795,7 @@ async function flushAuthStateSnapshotToSupabase(reason = "update") {
 
 function markAuthStateSnapshotDirty(reason = "update") {
   if (!isSupabaseAuthSnapshotEnabled()) {
+    markAppStateSnapshotDirty(`auth:${reason}`);
     return;
   }
   if (authSnapshotSaveTimer) {
@@ -1790,6 +1805,7 @@ function markAuthStateSnapshotDirty(reason = "update") {
     authSnapshotSaveTimer = null;
     void flushAuthStateSnapshotToSupabase(reason);
   }, AUTH_SNAPSHOT_SAVE_DEBOUNCE_MS);
+  markAppStateSnapshotDirty(`auth:${reason}`);
 }
 
 async function restoreAuthStateSnapshotFromSupabase() {
@@ -1839,6 +1855,297 @@ async function restoreAuthStateSnapshotFromSupabase() {
     }
   } catch (error) {
     console.warn(`[auth-snapshot] No se pudo restaurar: ${resolveErrorMessage(error)}`);
+  }
+}
+
+function normalizeSnapshotString(value, maxLength = 50000, fallback = "") {
+  const text = String(value ?? fallback);
+  return text.slice(0, Math.max(0, Number(maxLength) || 0));
+}
+
+function normalizeSnapshotFlag(value) {
+  return Number(value) === 1 ? 1 : 0;
+}
+
+function parseAppStateSnapshotPayload(rawText) {
+  let payload = null;
+  try {
+    payload = JSON.parse(String(rawText || "{}"));
+  } catch {
+    return {
+      users: [],
+      sessions: [],
+      tutorials: [],
+      userSettings: [],
+      savedViews: [],
+    };
+  }
+  return {
+    users: Array.isArray(payload?.users) ? payload.users : [],
+    sessions: Array.isArray(payload?.sessions) ? payload.sessions : [],
+    tutorials: Array.isArray(payload?.tutorials) ? payload.tutorials : [],
+    userSettings: Array.isArray(payload?.userSettings) ? payload.userSettings : [],
+    savedViews: Array.isArray(payload?.savedViews) ? payload.savedViews : [],
+  };
+}
+
+async function collectAppStateSnapshotPayload() {
+  const [users, sessions, tutorials, userSettings, savedViews] = await Promise.all([
+    allAsync("SELECT id, email, password_hash, password_salt, created_at FROM users"),
+    allAsync("SELECT token_hash, user_id, expires_at, created_at FROM sessions"),
+    allAsync(
+      `SELECT id, user_id, title, type, source, url, normalized_url, image_url, text_content, category, collection,
+              status, priority, is_favorite, review_date, tags, notes, notes_side, emoji, emoji_color, timestamps,
+              extra_content, created_at, updated_at
+       FROM tutorials`
+    ),
+    allAsync(
+      `SELECT user_id, storage_mode, local_root_path, cloud_root_path, cloud_provider, cloud_enabled, cloud_connected,
+              cloud_account_name, cloud_connected_at, cloud_connection_marker, cloud_access_token, cloud_refresh_token,
+              cloud_token_expires_at, cloud_scope, device_id, peer_enabled, sync_tutorial_ids, setup_completed,
+              last_sync_at, last_sync_status, last_sync_summary, updated_at
+       FROM user_settings`
+    ),
+    allAsync("SELECT id, user_id, name, filters_json, created_at, updated_at FROM saved_views"),
+  ]);
+  return {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    users,
+    sessions,
+    tutorials,
+    userSettings,
+    savedViews,
+  };
+}
+
+async function flushAppStateSnapshotToSupabase(reason = "update") {
+  if (!isSupabaseAppSnapshotEnabled()) {
+    return;
+  }
+  if (appSnapshotSaveInFlight) {
+    appSnapshotSavePending = true;
+    return;
+  }
+  appSnapshotSaveInFlight = true;
+  try {
+    await ensureSupabaseBucket();
+    const payload = await collectAppStateSnapshotPayload();
+    await uploadSupabaseObjectBuffer(
+      SUPABASE_APP_SNAPSHOT_OBJECT,
+      Buffer.from(JSON.stringify(payload)),
+      "application/json; charset=UTF-8"
+    );
+  } catch (error) {
+    console.warn(`[app-snapshot] No se pudo guardar (${reason}): ${resolveErrorMessage(error)}`);
+  } finally {
+    appSnapshotSaveInFlight = false;
+    if (appSnapshotSavePending) {
+      appSnapshotSavePending = false;
+      markAppStateSnapshotDirty("pending_retry");
+    }
+  }
+}
+
+function markAppStateSnapshotDirty(reason = "update") {
+  if (!isSupabaseAppSnapshotEnabled()) {
+    return;
+  }
+  if (appSnapshotSaveTimer) {
+    clearTimeout(appSnapshotSaveTimer);
+  }
+  appSnapshotSaveTimer = setTimeout(() => {
+    appSnapshotSaveTimer = null;
+    void flushAppStateSnapshotToSupabase(reason);
+  }, APP_SNAPSHOT_SAVE_DEBOUNCE_MS);
+}
+
+async function restoreAppStateSnapshotFromSupabase() {
+  if (!isSupabaseAppSnapshotEnabled()) {
+    return;
+  }
+  const [usersCountRow, tutorialsCountRow, settingsCountRow, viewsCountRow] = await Promise.all([
+    getAsync("SELECT COUNT(1) AS count FROM users"),
+    getAsync("SELECT COUNT(1) AS count FROM tutorials"),
+    getAsync("SELECT COUNT(1) AS count FROM user_settings"),
+    getAsync("SELECT COUNT(1) AS count FROM saved_views"),
+  ]);
+  const usersCount = Number(usersCountRow?.count || 0);
+  const tutorialsCount = Number(tutorialsCountRow?.count || 0);
+  const settingsCount = Number(settingsCountRow?.count || 0);
+  const viewsCount = Number(viewsCountRow?.count || 0);
+  if (usersCount > 0 || tutorialsCount > 0 || settingsCount > 0 || viewsCount > 0) {
+    return;
+  }
+  try {
+    await ensureSupabaseBucket();
+    const buffer = await downloadSupabaseObjectBuffer(SUPABASE_APP_SNAPSHOT_OBJECT);
+    if (!buffer) {
+      return;
+    }
+    const payload = parseAppStateSnapshotPayload(buffer.toString("utf8"));
+    const hasData =
+      payload.users.length ||
+      payload.sessions.length ||
+      payload.tutorials.length ||
+      payload.userSettings.length ||
+      payload.savedViews.length;
+    if (!hasData) {
+      return;
+    }
+    await runAsync("BEGIN IMMEDIATE TRANSACTION");
+    try {
+      await runAsync("DELETE FROM sessions");
+      await runAsync("DELETE FROM saved_views");
+      await runAsync("DELETE FROM tutorials");
+      await runAsync("DELETE FROM user_settings");
+      await runAsync("DELETE FROM users");
+
+      for (const row of payload.users) {
+        const id = asTrimmedString(row?.id).slice(0, 120);
+        const email = normalizeEmail(row?.email).slice(0, 320);
+        const passwordHash = asTrimmedString(row?.password_hash || row?.passwordHash).slice(0, 256);
+        const passwordSalt = asTrimmedString(row?.password_salt || row?.passwordSalt).slice(0, 256);
+        const createdAt = normalizeIsoTimestamp(row?.created_at || row?.createdAt, new Date().toISOString());
+        if (!id || !isValidEmail(email) || !passwordHash || !passwordSalt) {
+          continue;
+        }
+        await runAsync(
+          "INSERT INTO users (id, email, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?)",
+          [id, email, passwordHash, passwordSalt, createdAt]
+        );
+      }
+
+      for (const row of payload.sessions) {
+        const tokenHash = asTrimmedString(row?.token_hash || row?.tokenHash).toLowerCase();
+        const userId = asTrimmedString(row?.user_id || row?.userId).slice(0, 120);
+        const expiresAt = normalizeIsoTimestamp(row?.expires_at || row?.expiresAt);
+        const createdAt = normalizeIsoTimestamp(row?.created_at || row?.createdAt, new Date().toISOString());
+        if (!/^[a-f0-9]{64}$/.test(tokenHash) || !userId || !expiresAt) {
+          continue;
+        }
+        if (Date.parse(expiresAt) <= Date.now()) {
+          continue;
+        }
+        await runAsync("INSERT OR REPLACE INTO sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)", [
+          tokenHash,
+          userId,
+          expiresAt,
+          createdAt,
+        ]);
+      }
+
+      for (const row of payload.tutorials) {
+        const id = asTrimmedString(row?.id).slice(0, 120);
+        const userId = asTrimmedString(row?.user_id || row?.userId).slice(0, 120);
+        const title = asTrimmedString(row?.title).slice(0, 180);
+        const type = TYPE_OPTIONS.includes(row?.type) ? row.type : "text";
+        const source = SOURCE_OPTIONS.includes(row?.source) ? row.source : "manual";
+        const createdAt = normalizeIsoTimestamp(row?.created_at || row?.createdAt, new Date().toISOString());
+        const updatedAt = normalizeIsoTimestamp(row?.updated_at || row?.updatedAt, createdAt);
+        if (!id || !userId || !title) {
+          continue;
+        }
+        await runAsync(
+          `INSERT INTO tutorials (
+             id, user_id, title, type, source, url, normalized_url, image_url, text_content, category,
+             collection, status, priority, is_favorite, review_date, tags, notes, notes_side, emoji, emoji_color,
+             timestamps, extra_content, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            id,
+            userId,
+            title,
+            type,
+            source,
+            normalizeSnapshotString(row?.url, 2000),
+            normalizeSnapshotString(row?.normalized_url || row?.normalizedUrl, 2000),
+            normalizeSnapshotString(row?.image_url || row?.imageUrl, 2000),
+            normalizeSnapshotString(row?.text_content || row?.textContent, 120000),
+            normalizeSnapshotString(row?.category, 80),
+            normalizeSnapshotString(row?.collection, 80),
+            STATUS_ORDER.includes(row?.status) ? row.status : "Por ver",
+            PRIORITY_OPTIONS.includes(row?.priority) ? row.priority : "Media",
+            normalizeSnapshotFlag(row?.is_favorite || row?.isFavorite),
+            normalizeSnapshotString(row?.review_date || row?.reviewDate, 20),
+            normalizeSnapshotString(row?.tags ?? "[]", 8000, "[]"),
+            normalizeSnapshotString(row?.notes, 120000),
+            normalizeNoteSide(row?.notes_side || row?.notesSide, "right"),
+            normalizeEmoji(row?.emoji),
+            normalizeEmojiColor(row?.emoji_color || row?.emojiColor, "default"),
+            normalizeSnapshotString(row?.timestamps ?? "[]", 8000, "[]"),
+            normalizeSnapshotString(row?.extra_content || row?.extraContent || "[]", 120000, "[]"),
+            createdAt,
+            updatedAt,
+          ]
+        );
+      }
+
+      for (const row of payload.userSettings) {
+        const userId = asTrimmedString(row?.user_id || row?.userId).slice(0, 120);
+        if (!userId) {
+          continue;
+        }
+        await runAsync(
+          `INSERT INTO user_settings (
+             user_id, storage_mode, local_root_path, cloud_root_path, cloud_provider, cloud_enabled, cloud_connected,
+             cloud_account_name, cloud_connected_at, cloud_connection_marker, cloud_access_token, cloud_refresh_token,
+             cloud_token_expires_at, cloud_scope, device_id, peer_enabled, sync_tutorial_ids, setup_completed,
+             last_sync_at, last_sync_status, last_sync_summary, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            userId,
+            normalizeStorageMode(row?.storage_mode || row?.storageMode, "device"),
+            normalizeSnapshotString(row?.local_root_path || row?.localRootPath, 1000),
+            normalizeSnapshotString(row?.cloud_root_path || row?.cloudRootPath, 1000),
+            normalizeCloudProvider(row?.cloud_provider || row?.cloudProvider, "none"),
+            normalizeSnapshotFlag(row?.cloud_enabled || row?.cloudEnabled),
+            normalizeSnapshotFlag(row?.cloud_connected || row?.cloudConnected),
+            normalizeSnapshotString(row?.cloud_account_name || row?.cloudAccountName, 120),
+            normalizeIsoTimestamp(row?.cloud_connected_at || row?.cloudConnectedAt, ""),
+            normalizeSnapshotString(row?.cloud_connection_marker || row?.cloudConnectionMarker, 1000),
+            normalizeSnapshotString(row?.cloud_access_token || row?.cloudAccessToken, 4000),
+            normalizeSnapshotString(row?.cloud_refresh_token || row?.cloudRefreshToken, 4000),
+            normalizeIsoTimestamp(row?.cloud_token_expires_at || row?.cloudTokenExpiresAt, ""),
+            normalizeSnapshotString(row?.cloud_scope || row?.cloudScope, 500),
+            normalizeDeviceId(row?.device_id || row?.deviceId),
+            normalizeSnapshotFlag(row?.peer_enabled || row?.peerEnabled),
+            normalizeSnapshotString(row?.sync_tutorial_ids || row?.syncTutorialIds || "[]", 12000, "[]"),
+            normalizeSnapshotFlag(row?.setup_completed || row?.setupCompleted),
+            normalizeIsoTimestamp(row?.last_sync_at || row?.lastSyncAt, ""),
+            normalizeSyncStatus(row?.last_sync_status || row?.lastSyncStatus),
+            normalizeSnapshotString(row?.last_sync_summary || row?.lastSyncSummary || "{}", 50000, "{}"),
+            normalizeIsoTimestamp(row?.updated_at || row?.updatedAt, new Date().toISOString()),
+          ]
+        );
+      }
+
+      for (const row of payload.savedViews) {
+        const id = asTrimmedString(row?.id).slice(0, 120);
+        const userId = asTrimmedString(row?.user_id || row?.userId).slice(0, 120);
+        const name = normalizeSnapshotString(row?.name, 80);
+        const filtersJson = normalizeSnapshotString(row?.filters_json || row?.filtersJson || "{}", 20000, "{}");
+        const createdAt = normalizeIsoTimestamp(row?.created_at || row?.createdAt, new Date().toISOString());
+        const updatedAt = normalizeIsoTimestamp(row?.updated_at || row?.updatedAt, createdAt);
+        if (!id || !userId || !name) {
+          continue;
+        }
+        await runAsync(
+          "INSERT INTO saved_views (id, user_id, name, filters_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+          [id, userId, name, filtersJson, createdAt, updatedAt]
+        );
+      }
+
+      await runAsync("COMMIT");
+      console.log(
+        `[app-snapshot] Restaurado desde Supabase: users=${payload.users.length}, tutorials=${payload.tutorials.length}, settings=${payload.userSettings.length}.`
+      );
+    } catch (error) {
+      await runAsync("ROLLBACK").catch(() => {});
+      throw error;
+    }
+  } catch (error) {
+    console.warn(`[app-snapshot] No se pudo restaurar: ${resolveErrorMessage(error)}`);
   }
 }
 
@@ -3920,6 +4227,7 @@ async function runAndRecordStorageSync(userId) {
        WHERE user_id = ?`,
       [now, status, JSON.stringify(result), userId]
     );
+    markAppStateSnapshotDirty("sync_success");
     return result;
   } catch (error) {
     const fallback = {
@@ -3947,6 +4255,7 @@ async function runAndRecordStorageSync(userId) {
        WHERE user_id = ?`,
       [now, "error", JSON.stringify(fallback), userId]
     ).catch(() => null);
+    markAppStateSnapshotDirty("sync_error");
     throw error;
   }
 }
@@ -4030,10 +4339,12 @@ function notifyLiveClients(userId, eventName, payload) {
 
 function notifyTutorialsChanged(userId, reason = "update") {
   notifyLiveClients(userId, "tutorials_changed", { reason: asTrimmedString(reason) || "update" });
+  markAppStateSnapshotDirty(`tutorials:${asTrimmedString(reason) || "update"}`);
 }
 
 function notifySettingsChanged(userId, reason = "update") {
   notifyLiveClients(userId, "settings_changed", { reason: asTrimmedString(reason) || "update" });
+  markAppStateSnapshotDirty(`settings:${asTrimmedString(reason) || "update"}`);
 }
 
 function normalizeNoteSide(value, fallback = "right") {

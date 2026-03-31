@@ -2011,9 +2011,18 @@ body[data-theme="dark"] .card-preview {
 
 .window-media-shell {
   position: relative;
-  width: fit-content;
+  width: min(100%, 1120px);
   max-width: 100%;
   display: block;
+}
+
+.window-media-shell.is-portrait-embed {
+  width: min(100%, 560px);
+}
+
+.window-media-shell iframe,
+.window-media-shell video {
+  width: 100%;
 }
 
 .window-media-toggle {

@@ -85,6 +85,7 @@ const authRateLimiter = createRateLimiter({
   keyPrefix: "auth",
   windowMs: AUTH_RATE_LIMIT_WINDOW_MS,
   maxRequests: AUTH_RATE_LIMIT_MAX,
+  buildKey: (req) => buildAuthRateLimitKey(req),
   errorMessage: "Demasiados intentos de autenticacion. Intenta nuevamente en unos minutos.",
 });
 
@@ -172,6 +173,7 @@ app.post(
 
     const token = await createSession(userId);
     setSessionCookie(res, token);
+    authRateLimiter.clear?.(req);
 
     res.status(201).json({ user: { id: userId, email } });
   })
@@ -203,6 +205,7 @@ app.post(
 
     const token = await createSession(user.id);
     setSessionCookie(res, token);
+    authRateLimiter.clear?.(req);
     res.json({ user: { id: user.id, email: user.email } });
   })
 );
@@ -4088,11 +4091,14 @@ function normalizeOrigin(value) {
 
 function createRateLimiter({ keyPrefix, windowMs, maxRequests, errorMessage, buildKey }) {
   const store = new Map();
-
-  return function rateLimiter(req, res, next) {
-    const now = Date.now();
+  const resolveKey = (req) => {
     const rawKey = typeof buildKey === "function" ? asTrimmedString(buildKey(req)) : getClientIp(req);
-    const key = `${keyPrefix}:${rawKey || "unknown"}`;
+    return `${keyPrefix}:${rawKey || "unknown"}`;
+  };
+
+  const rateLimiter = function rateLimiter(req, res, next) {
+    const now = Date.now();
+    const key = resolveKey(req);
 
     const existing = store.get(key);
     if (!existing || existing.resetAt <= now) {
@@ -4116,6 +4122,22 @@ function createRateLimiter({ keyPrefix, windowMs, maxRequests, errorMessage, bui
 
     next();
   };
+
+  rateLimiter.clear = (req) => {
+    store.delete(resolveKey(req));
+  };
+
+  return rateLimiter;
+}
+
+function buildAuthRateLimitKey(req) {
+  const ip = asTrimmedString(getClientIp(req)) || "unknown";
+  const email = normalizeEmail(req.body?.email);
+  const userAgent = asTrimmedString(req.headers?.["user-agent"]).toLowerCase().slice(0, 160);
+  if (email) {
+    return `${ip}|${email}|${userAgent}`;
+  }
+  return `${ip}|${userAgent}`;
 }
 
 function getClientIp(req) {

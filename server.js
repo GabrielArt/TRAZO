@@ -967,6 +967,10 @@ async function initializeDatabase() {
   if (deletedExpired.changes > 0) {
     markAuthStateSnapshotDirty("cleanup_expired_sessions");
   }
+  const usersCountRow = await getAsync("SELECT COUNT(1) AS count FROM users");
+  if (Number(usersCountRow?.count || 0) > 0) {
+    markAuthStateSnapshotDirty("startup_seed");
+  }
 }
 
 async function ensureColumn(tableName, columnName, definition) {

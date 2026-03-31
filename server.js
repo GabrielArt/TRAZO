@@ -52,6 +52,8 @@ const GOOGLE_OAUTH_SCOPES = normalizeOauthScopes(process.env.GOOGLE_OAUTH_SCOPES
 const SUPABASE_URL = asTrimmedString(process.env.SUPABASE_URL);
 const SUPABASE_SERVICE_ROLE_KEY = asTrimmedString(process.env.SUPABASE_SERVICE_ROLE_KEY);
 const SUPABASE_BUCKET = normalizeSupabaseBucketId(asTrimmedString(process.env.SUPABASE_BUCKET) || "trazo-tutorials");
+const SUPABASE_AUTH_SNAPSHOT_OBJECT = asTrimmedString(process.env.SUPABASE_AUTH_SNAPSHOT_OBJECT) || "_system/auth-state-v1.json";
+const AUTH_SNAPSHOT_SAVE_DEBOUNCE_MS = Math.max(500, Number(process.env.AUTH_SNAPSHOT_SAVE_DEBOUNCE_MS) || 1500);
 const AUTO_CLOUD_SYNC_READ_MS = Number(process.env.AUTO_CLOUD_SYNC_READ_MS) || 1000;
 const CLOUD_MEDIA_TRANSFER_MAX_BYTES = readPositiveBytesEnv(
   process.env.CLOUD_MEDIA_TRANSFER_MAX_BYTES,
@@ -63,6 +65,9 @@ const googleOauthStateStore = new Map();
 const autoCloudSyncByUser = new Map();
 const autoCloudSyncInFlightByUser = new Set();
 const liveSseClientsByUser = new Map();
+let authSnapshotSaveTimer = null;
+let authSnapshotSaveInFlight = false;
+let authSnapshotSavePending = false;
 const TEXT_MIME_TYPES = new Set(["text/plain", "text/markdown", "text/x-markdown"]);
 const TEXT_EXTENSIONS = new Set([".txt", ".md", ".markdown"]);
 const MEDIA_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".mp4", ".webm", ".mov", ".m4v", ".ogg"]);
@@ -170,6 +175,7 @@ app.post(
       "INSERT INTO users (id, email, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?)",
       [userId, email, passwordHash, salt, now]
     );
+    markAuthStateSnapshotDirty("register_user");
 
     const token = await createSession(userId);
     setSessionCookie(res, token);
@@ -216,6 +222,7 @@ app.post(
     const token = getSessionToken(req);
     if (token) {
       await runAsync("DELETE FROM sessions WHERE token_hash = ?", [hashToken(token)]);
+      markAuthStateSnapshotDirty("logout");
     }
     clearSessionCookie(res);
     res.status(204).end();
@@ -949,12 +956,17 @@ async function initializeDatabase() {
   await ensureColumn("user_settings", "last_sync_summary", "TEXT NOT NULL DEFAULT '{}'");
   await ensureColumn("user_settings", "updated_at", "TEXT NOT NULL DEFAULT ''");
 
+  await restoreAuthStateSnapshotFromSupabase();
+
   await runAsync("CREATE INDEX IF NOT EXISTS idx_tutorials_user_updated ON tutorials (user_id, updated_at)");
   await runAsync("CREATE INDEX IF NOT EXISTS idx_saved_views_user_updated ON saved_views (user_id, updated_at)");
   await runAsync("CREATE INDEX IF NOT EXISTS idx_user_settings_updated ON user_settings (updated_at)");
   await runAsync("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id)");
   await runAsync("CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions (expires_at)");
-  await runAsync("DELETE FROM sessions WHERE datetime(expires_at) <= datetime('now')");
+  const deletedExpired = await runAsync("DELETE FROM sessions WHERE datetime(expires_at) <= datetime('now')");
+  if (deletedExpired.changes > 0) {
+    markAuthStateSnapshotDirty("cleanup_expired_sessions");
+  }
 }
 
 async function ensureColumn(tableName, columnName, definition) {
@@ -984,6 +996,7 @@ async function createSession(userId) {
     expiresAt.toISOString(),
     now.toISOString(),
   ]);
+  markAuthStateSnapshotDirty("session_create");
   return token;
 }
 
@@ -1035,6 +1048,7 @@ async function requireAuth(req, res, next) {
 
     if (Date.parse(row.expires_at) <= Date.now()) {
       await runAsync("DELETE FROM sessions WHERE token_hash = ?", [hashToken(token)]);
+      markAuthStateSnapshotDirty("session_expired");
       clearSessionCookie(res);
       res.status(401).json({ error: "Sesion expirada." });
       return;
@@ -1628,6 +1642,200 @@ function isGoogleOauthConfigured() {
 
 function isSupabaseConfigured() {
   return Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY);
+}
+
+function isSupabaseAuthSnapshotEnabled() {
+  return isSupabaseConfigured() && Boolean(SUPABASE_AUTH_SNAPSHOT_OBJECT);
+}
+
+function normalizeIsoTimestamp(value, fallback = "") {
+  const text = asTrimmedString(value);
+  if (!text) {
+    return fallback;
+  }
+  const parsed = Date.parse(text);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return new Date(parsed).toISOString();
+}
+
+function normalizeAuthSnapshotUser(value) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const id = asTrimmedString(value.id).slice(0, 120);
+  const email = normalizeEmail(value.email).slice(0, 320);
+  const passwordHash = asTrimmedString(value.passwordHash || value.password_hash).slice(0, 256);
+  const passwordSalt = asTrimmedString(value.passwordSalt || value.password_salt).slice(0, 256);
+  const createdAt = normalizeIsoTimestamp(value.createdAt || value.created_at, new Date().toISOString());
+  if (!id || !isValidEmail(email) || !passwordHash || !passwordSalt) {
+    return null;
+  }
+  return {
+    id,
+    email,
+    passwordHash,
+    passwordSalt,
+    createdAt,
+  };
+}
+
+function normalizeAuthSnapshotSession(value, validUserIds) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const tokenHash = asTrimmedString(value.tokenHash || value.token_hash).toLowerCase();
+  const userId = asTrimmedString(value.userId || value.user_id).slice(0, 120);
+  const expiresAt = normalizeIsoTimestamp(value.expiresAt || value.expires_at);
+  const createdAt = normalizeIsoTimestamp(value.createdAt || value.created_at, new Date().toISOString());
+  if (!/^[a-f0-9]{64}$/.test(tokenHash) || !userId || !expiresAt) {
+    return null;
+  }
+  if (Date.parse(expiresAt) <= Date.now()) {
+    return null;
+  }
+  if (validUserIds && !validUserIds.has(userId)) {
+    return null;
+  }
+  return {
+    tokenHash,
+    userId,
+    expiresAt,
+    createdAt,
+  };
+}
+
+function parseAuthSnapshotPayload(rawText) {
+  let payload = null;
+  try {
+    payload = JSON.parse(String(rawText || "{}"));
+  } catch {
+    return { users: [], sessions: [] };
+  }
+  const users = Array.isArray(payload?.users) ? payload.users.map((item) => normalizeAuthSnapshotUser(item)).filter(Boolean) : [];
+  const validUserIds = new Set(users.map((item) => item.id));
+  const sessions = Array.isArray(payload?.sessions)
+    ? payload.sessions.map((item) => normalizeAuthSnapshotSession(item, validUserIds)).filter(Boolean)
+    : [];
+  return { users, sessions };
+}
+
+async function collectAuthSnapshotPayload() {
+  const users = await allAsync(
+    "SELECT id, email, password_hash, password_salt, created_at FROM users ORDER BY datetime(created_at) ASC, id ASC"
+  );
+  const sessions = await allAsync(
+    "SELECT token_hash, user_id, expires_at, created_at FROM sessions ORDER BY datetime(created_at) ASC, token_hash ASC"
+  );
+  return {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    users: users.map((row) => ({
+      id: row.id,
+      email: row.email,
+      passwordHash: row.password_hash,
+      passwordSalt: row.password_salt,
+      createdAt: row.created_at,
+    })),
+    sessions: sessions.map((row) => ({
+      tokenHash: row.token_hash,
+      userId: row.user_id,
+      expiresAt: row.expires_at,
+      createdAt: row.created_at,
+    })),
+  };
+}
+
+async function flushAuthStateSnapshotToSupabase(reason = "update") {
+  if (!isSupabaseAuthSnapshotEnabled()) {
+    return;
+  }
+  if (authSnapshotSaveInFlight) {
+    authSnapshotSavePending = true;
+    return;
+  }
+  authSnapshotSaveInFlight = true;
+  try {
+    await ensureSupabaseBucket();
+    const payload = await collectAuthSnapshotPayload();
+    await uploadSupabaseObjectBuffer(
+      SUPABASE_AUTH_SNAPSHOT_OBJECT,
+      Buffer.from(JSON.stringify(payload)),
+      "application/json; charset=UTF-8"
+    );
+  } catch (error) {
+    console.warn(`[auth-snapshot] No se pudo guardar (${reason}): ${resolveErrorMessage(error)}`);
+  } finally {
+    authSnapshotSaveInFlight = false;
+    if (authSnapshotSavePending) {
+      authSnapshotSavePending = false;
+      markAuthStateSnapshotDirty("pending_retry");
+    }
+  }
+}
+
+function markAuthStateSnapshotDirty(reason = "update") {
+  if (!isSupabaseAuthSnapshotEnabled()) {
+    return;
+  }
+  if (authSnapshotSaveTimer) {
+    clearTimeout(authSnapshotSaveTimer);
+  }
+  authSnapshotSaveTimer = setTimeout(() => {
+    authSnapshotSaveTimer = null;
+    void flushAuthStateSnapshotToSupabase(reason);
+  }, AUTH_SNAPSHOT_SAVE_DEBOUNCE_MS);
+}
+
+async function restoreAuthStateSnapshotFromSupabase() {
+  if (!isSupabaseAuthSnapshotEnabled()) {
+    return;
+  }
+  const row = await getAsync("SELECT COUNT(1) AS count FROM users");
+  const usersCount = Number(row?.count || 0);
+  if (usersCount > 0) {
+    return;
+  }
+  try {
+    await ensureSupabaseBucket();
+    const buffer = await downloadSupabaseObjectBuffer(SUPABASE_AUTH_SNAPSHOT_OBJECT);
+    if (!buffer) {
+      return;
+    }
+    const payload = parseAuthSnapshotPayload(buffer.toString("utf8"));
+    if (!payload.users.length) {
+      return;
+    }
+    await runAsync("BEGIN IMMEDIATE TRANSACTION");
+    try {
+      await runAsync("DELETE FROM sessions");
+      await runAsync("DELETE FROM users");
+      for (const user of payload.users) {
+        await runAsync(
+          "INSERT INTO users (id, email, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?)",
+          [user.id, user.email, user.passwordHash, user.passwordSalt, user.createdAt]
+        );
+      }
+      for (const session of payload.sessions) {
+        await runAsync("INSERT OR REPLACE INTO sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)", [
+          session.tokenHash,
+          session.userId,
+          session.expiresAt,
+          session.createdAt,
+        ]);
+      }
+      await runAsync("COMMIT");
+      console.log(
+        `[auth-snapshot] Restaurado desde Supabase: ${payload.users.length} usuario(s), ${payload.sessions.length} sesion(es).`
+      );
+    } catch (error) {
+      await runAsync("ROLLBACK").catch(() => {});
+      throw error;
+    }
+  } catch (error) {
+    console.warn(`[auth-snapshot] No se pudo restaurar: ${resolveErrorMessage(error)}`);
+  }
 }
 
 function normalizeReturnTo(rawValue) {

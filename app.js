@@ -347,6 +347,7 @@ async function init() {
   bindEvents();
   wasCompactSidebarViewport = isCompactSidebarViewport();
   applyTheme(state.theme);
+  setAuthenticated(null);
   applySidebarCollapsed(state.sidebarCollapsed, { persist: false });
   syncResponsiveShell();
   syncAdvancedFiltersVisibility();
@@ -355,8 +356,8 @@ async function init() {
   switchAuthMode("login");
   syncTypeSpecificFields();
   syncUploadLimitHints();
-  await refreshClientConfig();
-  await bootstrapSession();
+  void refreshClientConfig();
+  void bootstrapSession();
 }
 
 function bindEvents() {
@@ -734,9 +735,11 @@ function bindEvents() {
 
 async function bootstrapSession() {
   setAuthenticated(null);
+  setAuthMessage("Conectando con el servidor...", false);
   try {
     const response = await apiAuthMe();
     setAuthenticated(response.user);
+    setAuthMessage("", false);
     await refreshTutorials();
     await refreshSavedViews();
     await refreshUserSettings();
@@ -10801,9 +10804,10 @@ async function requestJson(url, options = {}) {
     init.body = JSON.stringify(options.body);
   }
 
+  const isAuthEndpoint = /\/auth\/(me|login|register|logout)$/i.test(url);
   const shouldRetry =
-    method === "GET" || /\/auth\/login$/i.test(url) || /\/auth\/me$/i.test(url) || /\/auth\/logout$/i.test(url);
-  const maxAttempts = shouldRetry ? 2 : 1;
+    method === "GET" || isAuthEndpoint;
+  const maxAttempts = shouldRetry ? (isAuthEndpoint ? 6 : 2) : 1;
   let lastNetworkError = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -10814,7 +10818,7 @@ async function requestJson(url, options = {}) {
       if (!response.ok) {
         const isRetryableStatus = response.status === 502 || response.status === 503 || response.status === 504;
         if (isRetryableStatus && attempt < maxAttempts) {
-          await waitMs(900 * attempt);
+          await waitMs(getRetryDelayMs(attempt, isAuthEndpoint));
           continue;
         }
 
@@ -10829,7 +10833,7 @@ async function requestJson(url, options = {}) {
     } catch (error) {
       lastNetworkError = error;
       if (attempt < maxAttempts) {
-        await waitMs(900 * attempt);
+        await waitMs(getRetryDelayMs(attempt, isAuthEndpoint));
         continue;
       }
       throw error;
@@ -10858,4 +10862,12 @@ function waitMs(ms) {
   return new Promise((resolve) => {
     window.setTimeout(resolve, Math.max(0, Number(ms) || 0));
   });
+}
+
+function getRetryDelayMs(attempt, isAuthEndpoint = false) {
+  if (isAuthEndpoint) {
+    const schedule = [1000, 2000, 4000, 6000, 8000];
+    return schedule[Math.max(0, attempt - 1)] || 9000;
+  }
+  return 900 * Math.max(1, attempt);
 }

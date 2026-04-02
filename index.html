@@ -238,26 +238,10 @@
                   <article class="settings-card">
                     <h3>Sincronizacion y almacenamiento</h3>
                     <p class="meta">
-                      Configura almacenamiento local, nube y sincronizacion entre dispositivos. Puedes elegir que tutoriales se sincronizan.
+                      TRAZO usa almacenamiento local por dispositivo y Supabase como tunel de sincronizacion para texto/metadatos.
                     </p>
+                    <p class="meta">Los archivos grandes se transfieren por P2P cuando hay otro dispositivo conectado.</p>
                     <div class="form-grid">
-                      <label>
-                        Modo de almacenamiento
-                        <select id="storageModeSelect">
-                          <option value="device">Solo dispositivo</option>
-                          <option value="cloud">Nube</option>
-                          <option value="peer">Dispositivo a dispositivo</option>
-                          <option value="hybrid">Hibrido (dispositivo + nube)</option>
-                        </select>
-                      </label>
-                      <label>
-                        Proveedor nube
-                        <select id="cloudProviderSelect">
-                          <option value="none">Sin proveedor</option>
-                          <option value="google_drive">Google Drive</option>
-                          <option value="supabase">Supabase</option>
-                        </select>
-                      </label>
                       <label class="full-width">
                         Carpeta local principal
                         <input
@@ -267,11 +251,11 @@
                         />
                       </label>
                       <label class="full-width">
-                        Carpeta nube / prefijo remoto
+                        Prefijo remoto (opcional)
                         <input
                           id="cloudRootPathInput"
                           type="text"
-                          placeholder="Ej: TRAZO o trazo"
+                          placeholder="Ej: trazo"
                         />
                       </label>
                     </div>
@@ -280,29 +264,22 @@
                       <button class="ghost-btn" type="button" id="createLocalFolderButton">Crear carpeta local</button>
                     </div>
                     <div class="settings-actions">
-                      <button class="ghost-btn" type="button" id="connectCloudButton">Conectar Google Drive</button>
-                      <button class="ghost-btn" type="button" id="disconnectCloudButton">Desconectar proveedor</button>
-                    </div>
-                    <p id="cloudConnectionStatus" class="meta">Proveedor desactivado.</p>
-                    <div class="settings-actions">
                       <label class="check-row">
                         <input id="cloudSyncEnabled" type="checkbox" />
-                        Activar sincronizacion con nube
+                        Activar tunel nube (texto/metadatos)
                       </label>
                       <label class="check-row">
                         <input id="peerSyncEnabled" type="checkbox" />
-                        Activar sincronizacion entre dispositivos (beta)
+                        Activar P2P para archivos grandes
                       </label>
                     </div>
                     <div class="settings-actions">
                       <button class="primary-btn" type="button" id="saveStorageSettingsButton">Guardar configuracion</button>
                       <button class="ghost-btn" type="button" id="runStorageSyncButton">Sincronizar ahora</button>
-                      <button class="ghost-btn" type="button" id="exportDevicePackageButton">Exportar paquete (dispositivo)</button>
-                      <button class="ghost-btn" type="button" id="importDevicePackageButton">Importar paquete (dispositivo)</button>
-                      <input id="importDevicePackageInput" type="file" accept=".json" hidden />
                     </div>
                     <p id="syncNowHint" class="meta sync-now-hint"></p>
                     <p id="storageSetupStatus" class="meta">Sin configurar.</p>
+                    <p id="cloudConnectionStatus" class="meta">Supabase integrado por backend.</p>
                     <p id="storageRoutingHint" class="meta sync-route-hint"></p>
                     <div class="sync-insight">
                       <p id="lastSyncMeta" class="meta">Ultima sincronizacion: sin ejecuciones.</p>
@@ -638,46 +615,28 @@
           <button type="button" id="closeSetupButton" class="ghost-btn">Cerrar</button>
         </header>
         <p class="meta">
-          Elige donde se guarda tu contenido y si quieres sincronizar en nube o entre dispositivos.
+          Define tu carpeta local. Supabase se usa como tunel para texto/metadatos.
         </p>
-        <label class="full-width">
-          Modo
-          <select id="setupStorageMode">
-            <option value="device">Solo dispositivo</option>
-            <option value="cloud">Nube</option>
-            <option value="peer">Dispositivo a dispositivo</option>
-            <option value="hybrid">Hibrido</option>
-          </select>
-        </label>
         <label class="full-width">
           Carpeta local
           <input id="setupLocalRootPath" type="text" placeholder="Ej: C:\\Tutoriales\\TRAZO o ./mi_carpeta_trazo" />
         </label>
         <label class="full-width">
-          Proveedor nube
-          <select id="setupCloudProvider">
-            <option value="none">Sin proveedor</option>
-            <option value="google_drive">Google Drive</option>
-            <option value="supabase">Supabase</option>
-          </select>
-        </label>
-        <label class="full-width">
-          Carpeta nube / prefijo remoto
+          Prefijo remoto (opcional)
           <input id="setupCloudRootPath" type="text" placeholder="Ej: TRAZO o trazo" />
         </label>
         <label class="check-row full-width">
           <input id="setupCloudSyncEnabled" type="checkbox" />
-          Activar sincronizacion nube
+          Activar tunel nube
         </label>
         <label class="check-row full-width">
           <input id="setupPeerSyncEnabled" type="checkbox" />
-          Activar sincronizacion entre dispositivos (beta)
+          Activar P2P para archivos grandes
         </label>
         <p id="setupStatus" class="upload-status"></p>
         <p id="setupRoutingHint" class="meta sync-route-hint"></p>
         <footer class="dialog-footer">
           <button type="button" class="ghost-btn" id="createSetupLocalFolderButton">Crear carpeta</button>
-          <button type="button" class="ghost-btn" id="createSetupCloudFolderButton">Crear carpeta nube</button>
           <button type="submit" class="primary-btn" id="saveSetupButton">Guardar</button>
         </footer>
       </form>

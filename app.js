@@ -609,18 +609,21 @@ function bindEvents() {
     void saveSetupDialogSettings();
   });
   [
-    refs.storageModeSelect,
-    refs.cloudProviderSelect,
+    refs.localRootPathInput,
+    refs.cloudRootPathInput,
     refs.cloudSyncEnabled,
     refs.peerSyncEnabled,
-    refs.setupStorageMode,
-    refs.setupCloudProvider,
+    refs.setupLocalRootPath,
+    refs.setupCloudRootPath,
     refs.setupCloudSyncEnabled,
     refs.setupPeerSyncEnabled,
   ]
     .filter(Boolean)
     .forEach((input) => {
       input.addEventListener("change", syncStorageRoutingHintsFromInputs);
+      if (input instanceof HTMLInputElement && input.type === "text") {
+        input.addEventListener("input", syncStorageRoutingHintsFromInputs);
+      }
     });
   refs.selectVisibleButton.addEventListener("click", () => {
     selectVisibleTutorials();
@@ -2833,63 +2836,49 @@ async function refreshUserSettings() {
 }
 
 function buildStorageRoutingHint(settings) {
-  const mode = String(settings?.storageMode || "device");
   const cloudConnected = Boolean(settings?.cloudConnected);
   const cloudEnabled = Boolean(settings?.cloudEnabled);
-  const cloudProvider = String(settings?.cloudProvider || "none");
   const peerEnabled = Boolean(settings?.peerEnabled);
-  const cloudLimitLabel = formatBytesForUi(getEffectiveCloudMediaTransferMaxBytes());
-  const cloudName = formatCloudProviderLabel(cloudProvider);
 
-  if (mode === "device") {
-    return "Solo dispositivo: todo queda local.";
+  if (!cloudEnabled) {
+    return "Tunel nube apagado: todo queda local.";
   }
-  if (mode === "peer") {
-    return "P2P: transfiere entre dispositivos conectados.";
-  }
-  if (!cloudEnabled || cloudProvider === "none" || !cloudConnected) {
-    return "Nube no conectada: el contenido queda local.";
+  if (!cloudConnected) {
+    return "Tunel nube encendido, pendiente de activar en backend.";
   }
   if (peerEnabled) {
-    return `${cloudName}: texto y metadatos por nube; archivos grandes por P2P.`;
+    return "Texto/metadatos por nube + archivos grandes por P2P.";
   }
-  return `${cloudName}: texto y metadatos por nube; archivos grandes quedan pendientes. Limite nube temporal: ${cloudLimitLabel}.`;
+  return "Texto/metadatos por nube + archivos grandes pendientes hasta que haya otro dispositivo.";
 }
 
 function buildSyncNowHint(settings) {
-  const mode = String(settings?.storageMode || "device");
   const cloudConnected = Boolean(settings?.cloudConnected);
   const cloudEnabled = Boolean(settings?.cloudEnabled);
-  const cloudProvider = String(settings?.cloudProvider || "none");
   const peerEnabled = Boolean(settings?.peerEnabled);
   const cloudLimitLabel = formatBytesForUi(getEffectiveCloudMediaTransferMaxBytes());
-  const hasCloudPath = cloudEnabled && cloudConnected && cloudProvider !== "none";
   const pendingPeer = Number(settings?.lastSyncSummary?.cloud?.pendingPeer || 0);
-  const cloudName = formatCloudProviderLabel(cloudProvider);
 
-  if (mode === "device") {
-    return "Sin nube en este modo.";
+  if (!cloudEnabled) {
+    return "Activa el tunel nube para sincronizar texto/metadatos.";
   }
-  if (mode === "peer") {
-    return "Sincroniza con dispositivos conectados (P2P).";
-  }
-  if (!hasCloudPath) {
-    return "Conecta la nube para sincronizar.";
+  if (!cloudConnected) {
+    return "Guarda configuracion para terminar de conectar el tunel nube.";
   }
 
-  const base = `${cloudName}: texto/metadatos + archivos hasta ${cloudLimitLabel}.`;
+  const base = `Nube: texto/metadatos + archivos hasta ${cloudLimitLabel}.`;
   if (pendingPeer > 0) {
-    return `${base} Pendientes grandes: ${pendingPeer} (P2P).`;
+    return `${base} Pendientes grandes: ${pendingPeer}.`;
   }
   if (peerEnabled) {
-    return `${base} Archivos mayores pasan a P2P automaticamente.`;
+    return `${base} Archivos grandes pasan a P2P automaticamente.`;
   }
-  return `${base} Archivos mayores quedaran pendientes hasta activar P2P.`;
+  return `${base} Archivos grandes quedaran pendientes hasta activar P2P.`;
 }
 
 function syncStorageRoutingHintsFromInputs() {
   const fallback = normalizeUserSettings(state.userSettings);
-  const panelDraft = refs.storageModeSelect ? collectStorageSettingsFromPanel() : fallback;
+  const panelDraft = refs.localRootPathInput ? collectStorageSettingsFromPanel() : fallback;
   if (refs.storageRoutingHint) {
     refs.storageRoutingHint.textContent = buildStorageRoutingHint(panelDraft);
   }
@@ -2897,42 +2886,31 @@ function syncStorageRoutingHintsFromInputs() {
     refs.syncNowHint.textContent = buildSyncNowHint(panelDraft);
   }
   if (refs.setupRoutingHint) {
-    const setupDraft = refs.setupStorageMode ? collectStorageSettingsFromSetupDialog() : fallback;
+    const setupDraft = refs.setupLocalRootPath ? collectStorageSettingsFromSetupDialog() : fallback;
     refs.setupRoutingHint.textContent = buildStorageRoutingHint(setupDraft);
   }
 }
 
-function syncStorageSettingsUi() {
-  const settings = normalizeUserSettings(state.userSettings);
+function syncStorageSettingsUiLegacy() {
+  const raw = normalizeUserSettings(state.userSettings);
+  const settings = normalizeUserSettings({
+    ...raw,
+    storageMode: "hybrid",
+    cloudProvider: "supabase",
+    cloudAccountName: "",
+  });
   state.userSettings = settings;
-  const cloudLabel = formatCloudProviderLabel(settings.cloudProvider);
-  const cloudStateLabel = settings.cloudConnected ? "conectada" : "sin conectar";
-  const isGoogleDrive = settings.cloudProvider === "google_drive";
-  const isSupabase = settings.cloudProvider === "supabase";
-  const usesRemoteApiSync = isGoogleDrive || isSupabase;
-
-  if (refs.storageModeSelect) {
-    refs.storageModeSelect.value = settings.storageMode;
-  }
+  const isSupabase = true;
+  const isGoogleDrive = false;
+  const cloudLabel = "Supabase";
+  const cloudStateLabel = settings.cloudConnected ? "conectado" : "pendiente";
+  const usesRemoteApiSync = true;
   if (refs.localRootPathInput) {
     refs.localRootPathInput.value = settings.localRootPath || "";
   }
   if (refs.cloudRootPathInput) {
     refs.cloudRootPathInput.value = settings.cloudRootPath || "";
-    refs.cloudRootPathInput.placeholder = isGoogleDrive
-      ? "Ej: TRAZO (carpeta remota en Google Drive)"
-      : isSupabase
-        ? "Ej: trazo (prefijo remoto en Supabase Storage)"
-        : "Ej: C:\\Users\\TuUsuario\\OneDrive\\TRAZO";
-  }
-  if (refs.cloudProviderSelect) {
-    const hasProviderOption = Array.from(refs.cloudProviderSelect.options).some(
-      (option) => option.value === settings.cloudProvider
-    );
-    refs.cloudProviderSelect.value = hasProviderOption ? settings.cloudProvider : "none";
-  }
-  if (refs.cloudAccountNameInput) {
-    refs.cloudAccountNameInput.value = settings.cloudAccountName || "";
+    refs.cloudRootPathInput.placeholder = "Ej: trazo (prefijo remoto)";
   }
   if (refs.cloudSyncEnabled) {
     refs.cloudSyncEnabled.checked = settings.cloudEnabled;
@@ -2940,38 +2918,13 @@ function syncStorageSettingsUi() {
   if (refs.peerSyncEnabled) {
     refs.peerSyncEnabled.checked = settings.peerEnabled;
   }
-  if (refs.connectCloudButton) {
-    const shouldShowConnect = isGoogleDrive;
-    refs.connectCloudButton.classList.toggle("hidden", !shouldShowConnect);
-    refs.connectCloudButton.disabled = !shouldShowConnect || settings.cloudConnected;
-    refs.connectCloudButton.textContent = settings.cloudConnected ? "Google Drive conectado" : "Conectar Google Drive";
-  }
-  if (refs.disconnectCloudButton) {
-    const shouldShowDisconnect = isGoogleDrive && settings.cloudConnected;
-    refs.disconnectCloudButton.classList.toggle("hidden", !shouldShowDisconnect);
-    refs.disconnectCloudButton.disabled = !shouldShowDisconnect;
-  }
-  if (refs.pickCloudFolderButton) {
-    refs.pickCloudFolderButton.classList.add("hidden");
-  }
-  if (refs.createCloudFolderButton) {
-    refs.createCloudFolderButton.classList.add("hidden");
-  }
-  if (refs.openCloudSignInButton) {
-    refs.openCloudSignInButton.classList.add("hidden");
-  }
-  if (refs.oauthDiagnosticButton) {
-    refs.oauthDiagnosticButton.classList.add("hidden");
-  }
-  if (refs.oauthDriveDiagnosticButton) {
-    refs.oauthDriveDiagnosticButton.classList.add("hidden");
+  if (refs.storageSetupStatus) {
+    const cloudSummary = "tunel Supabase";
+    refs.storageSetupStatus.textContent = `Modelo: local + tunel Supabase · Tutoriales nube: ${settings.syncTutorialIds.length}`;
+    refs.storageSetupStatus.textContent = `Modo: ${settings.storageMode} · Nube: ${cloudSummary} · Tutoriales nube: ${settings.syncTutorialIds.length}`;
   }
   if (refs.storageSetupStatus) {
-    const cloudSummary =
-      settings.cloudProvider === "none"
-        ? "Sin proveedor"
-        : `${cloudLabel} ${cloudStateLabel}${usesRemoteApiSync ? " (API)" : ""}`;
-    refs.storageSetupStatus.textContent = `Modo: ${settings.storageMode} · Nube: ${cloudSummary} · Tutoriales nube: ${settings.syncTutorialIds.length}`;
+    refs.storageSetupStatus.textContent = `Modelo local + tunel Supabase. Tutoriales nube: ${settings.syncTutorialIds.length}`;
   }
   syncStorageRoutingHintsFromInputs();
   if (refs.cloudConnectionStatus) {
@@ -2988,6 +2941,18 @@ function syncStorageSettingsUi() {
     } else {
       refs.cloudConnectionStatus.textContent = `${cloudLabel}: ${cloudStateLabel}${dateLabel}.`;
     }
+  }
+  if (refs.cloudConnectionStatus) {
+    const connectedAt = settings.cloudConnectedAt
+      ? new Date(settings.cloudConnectedAt).toLocaleString("es-BO", {
+          dateStyle: "short",
+          timeStyle: "short",
+        })
+      : "";
+    const dateLabel = connectedAt ? ` · Desde: ${connectedAt}` : "";
+    refs.cloudConnectionStatus.textContent = settings.cloudConnected
+      ? `Supabase conectado por backend${dateLabel}.`
+      : "Supabase pendiente. Guarda configuracion para activar el tunel.";
   }
   if (refs.lastSyncMeta) {
     refs.lastSyncMeta.textContent = buildLastSyncMeta(settings);
@@ -3025,6 +2990,97 @@ function syncStorageSettingsUi() {
   }
   if (refs.createSetupCloudFolderButton) {
     refs.createSetupCloudFolderButton.disabled = usesRemoteApiSync;
+  }
+
+  if (refs.setupTutorialSyncList) {
+    if (!state.tutorials.length) {
+      refs.setupTutorialSyncList.innerHTML = `<p class="meta">Aun no hay tutoriales.</p>`;
+    } else {
+      const selected = new Set(settings.syncTutorialIds);
+      refs.setupTutorialSyncList.innerHTML = state.tutorials
+        .slice(0, 120)
+        .map((tutorial) => {
+          const checked = selected.has(tutorial.id) ? "checked" : "";
+          const token = renderSidebarTutorialToken(tutorial);
+          return `
+            <label class="column-option">
+              <input type="checkbox" data-sync-tutorial-id="${tutorial.id}" ${checked} />
+              <span class="sync-tutorial-line">${token}<span>${escapeHtml(tutorial.title)}</span></span>
+            </label>
+          `;
+        })
+        .join("");
+    }
+  }
+}
+
+// Canonical UI sync for storage settings (Supabase tunnel + P2P model).
+// Intentionally declared after legacy function body to override stale logic.
+function syncStorageSettingsUi() {
+  const raw = normalizeUserSettings(state.userSettings);
+  const settings = normalizeUserSettings({
+    ...raw,
+    storageMode: "hybrid",
+    cloudProvider: "supabase",
+    cloudAccountName: "",
+  });
+  state.userSettings = settings;
+
+  if (refs.localRootPathInput) {
+    refs.localRootPathInput.value = settings.localRootPath || "";
+  }
+  if (refs.cloudRootPathInput) {
+    refs.cloudRootPathInput.value = settings.cloudRootPath || "";
+    refs.cloudRootPathInput.placeholder = "Ej: trazo (prefijo remoto)";
+  }
+  if (refs.cloudSyncEnabled) {
+    refs.cloudSyncEnabled.checked = settings.cloudEnabled;
+  }
+  if (refs.peerSyncEnabled) {
+    refs.peerSyncEnabled.checked = settings.peerEnabled;
+  }
+
+  if (refs.storageSetupStatus) {
+    refs.storageSetupStatus.textContent = `Modelo local + tunel Supabase. Tutoriales nube: ${settings.syncTutorialIds.length}`;
+  }
+  syncStorageRoutingHintsFromInputs();
+
+  if (refs.cloudConnectionStatus) {
+    const connectedAt = settings.cloudConnectedAt
+      ? new Date(settings.cloudConnectedAt).toLocaleString("es-BO", {
+          dateStyle: "short",
+          timeStyle: "short",
+        })
+      : "";
+    const dateLabel = connectedAt ? ` · Desde: ${connectedAt}` : "";
+    refs.cloudConnectionStatus.textContent = settings.cloudConnected
+      ? `Supabase conectado por backend${dateLabel}.`
+      : "Supabase pendiente. Guarda configuracion para activar el tunel.";
+  }
+
+  if (refs.lastSyncMeta) {
+    refs.lastSyncMeta.textContent = buildLastSyncMeta(settings);
+    refs.lastSyncMeta.classList.toggle("is-error", settings.lastSyncStatus === "error");
+  }
+  if (refs.lastSyncDetails) {
+    const detailItems = buildLastSyncDetailItems(settings);
+    refs.lastSyncDetails.innerHTML = detailItems.length
+      ? detailItems.map((item) => `<li>${escapeHtml(item)}</li>`).join("")
+      : `<li class="meta">Aun no hay ejecuciones registradas.</li>`;
+  }
+
+  if (refs.setupLocalRootPath) {
+    refs.setupLocalRootPath.value = settings.localRootPath || "";
+  }
+  if (refs.setupCloudRootPath) {
+    refs.setupCloudRootPath.value = settings.cloudRootPath || "";
+    refs.setupCloudRootPath.placeholder = "Ej: trazo (prefijo remoto)";
+  }
+  if (refs.setupCloudSyncEnabled) {
+    refs.setupCloudSyncEnabled.checked = settings.cloudEnabled;
+  }
+  if (refs.setupPeerSyncEnabled) {
+    refs.setupPeerSyncEnabled.checked = settings.peerEnabled;
   }
 
   if (refs.setupTutorialSyncList) {
@@ -3118,10 +3174,10 @@ function collectStorageSettingsFromPanel() {
     .map((input) => input.getAttribute("data-sync-tutorial-id") || "")
     .filter(Boolean);
   return normalizeUserSettings({
-    storageMode: refs.storageModeSelect?.value || state.userSettings.storageMode,
+    storageMode: "hybrid",
     localRootPath: refs.localRootPathInput?.value || "",
     cloudRootPath: refs.cloudRootPathInput?.value || "",
-    cloudProvider: refs.cloudProviderSelect?.value || "none",
+    cloudProvider: "supabase",
     cloudAccountName: "",
     cloudConnected: state.userSettings.cloudConnected,
     cloudConnectedAt: state.userSettings.cloudConnectedAt,
@@ -3137,10 +3193,10 @@ function collectStorageSettingsFromPanel() {
 
 function collectStorageSettingsFromSetupDialog() {
   return normalizeUserSettings({
-    storageMode: refs.setupStorageMode?.value || state.userSettings.storageMode,
+    storageMode: "hybrid",
     localRootPath: refs.setupLocalRootPath?.value || "",
     cloudRootPath: refs.setupCloudRootPath?.value || "",
-    cloudProvider: refs.setupCloudProvider?.value || "none",
+    cloudProvider: "supabase",
     cloudAccountName: "",
     cloudConnected: state.userSettings.cloudConnected,
     cloudConnectedAt: state.userSettings.cloudConnectedAt,
@@ -3470,8 +3526,6 @@ async function runStorageSyncNow() {
     }
     const status = String(state.userSettings.lastSyncStatus || "idle");
     setSyncStatus(`Sincronizacion completada | ${count} tutorial(es) | estado: ${status}`);
-    return;
-    setSyncStatus(`Sincronizacion completada · ${count} tutorial(es)`);
   } catch (error) {
     showOperationError(error, "No se pudo ejecutar la sincronizacion.");
   }

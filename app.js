@@ -303,33 +303,18 @@ const refs = {
   closeSetupButton: document.querySelector("#closeSetupButton"),
   saveSetupButton: document.querySelector("#saveSetupButton"),
   createSetupLocalFolderButton: document.querySelector("#createSetupLocalFolderButton"),
-  setupStorageMode: document.querySelector("#setupStorageMode"),
   setupLocalRootPath: document.querySelector("#setupLocalRootPath"),
-  setupCloudProvider: document.querySelector("#setupCloudProvider"),
   setupCloudSyncEnabled: document.querySelector("#setupCloudSyncEnabled"),
   setupPeerSyncEnabled: document.querySelector("#setupPeerSyncEnabled"),
   setupStatus: document.querySelector("#setupStatus"),
-  storageModeSelect: document.querySelector("#storageModeSelect"),
   localRootPathInput: document.querySelector("#localRootPathInput"),
   cloudRootPathInput: document.querySelector("#cloudRootPathInput"),
-  cloudProviderSelect: document.querySelector("#cloudProviderSelect"),
-  cloudAccountNameInput: document.querySelector("#cloudAccountNameInput"),
   cloudSyncEnabled: document.querySelector("#cloudSyncEnabled"),
   peerSyncEnabled: document.querySelector("#peerSyncEnabled"),
   pickLocalFolderButton: document.querySelector("#pickLocalFolderButton"),
-  pickCloudFolderButton: document.querySelector("#pickCloudFolderButton"),
-  openCloudSignInButton: document.querySelector("#openCloudSignInButton"),
-  connectCloudButton: document.querySelector("#connectCloudButton"),
-  oauthDiagnosticButton: document.querySelector("#oauthDiagnosticButton"),
-  oauthDriveDiagnosticButton: document.querySelector("#oauthDriveDiagnosticButton"),
-  disconnectCloudButton: document.querySelector("#disconnectCloudButton"),
   createLocalFolderButton: document.querySelector("#createLocalFolderButton"),
-  createCloudFolderButton: document.querySelector("#createCloudFolderButton"),
   saveStorageSettingsButton: document.querySelector("#saveStorageSettingsButton"),
   runStorageSyncButton: document.querySelector("#runStorageSyncButton"),
-  exportDevicePackageButton: document.querySelector("#exportDevicePackageButton"),
-  importDevicePackageButton: document.querySelector("#importDevicePackageButton"),
-  importDevicePackageInput: document.querySelector("#importDevicePackageInput"),
   syncNowHint: document.querySelector("#syncNowHint"),
   storageSetupStatus: document.querySelector("#storageSetupStatus"),
   storageRoutingHint: document.querySelector("#storageRoutingHint"),
@@ -338,7 +323,6 @@ const refs = {
   lastSyncDetails: document.querySelector("#lastSyncDetails"),
   setupTutorialSyncList: document.querySelector("#setupTutorialSyncList"),
   setupCloudRootPath: document.querySelector("#setupCloudRootPath"),
-  createSetupCloudFolderButton: document.querySelector("#createSetupCloudFolderButton"),
   setupRoutingHint: document.querySelector("#setupRoutingHint"),
 };
 
@@ -588,22 +572,11 @@ function bindEvents() {
   refs.enableRemindersButton.addEventListener("click", () => void handleEnableReminders());
   refs.saveStorageSettingsButton?.addEventListener("click", () => void saveStorageSettingsFromPanel());
   refs.pickLocalFolderButton?.addEventListener("click", () => void pickLocalFolderFromExplorer("local"));
-  refs.pickCloudFolderButton?.addEventListener("click", () => void pickLocalFolderFromExplorer("cloud"));
-  refs.openCloudSignInButton?.addEventListener("click", openSelectedCloudProviderSignIn);
-  refs.oauthDiagnosticButton?.addEventListener("click", runGoogleOauthDiagnostic);
-  refs.oauthDriveDiagnosticButton?.addEventListener("click", runGoogleDriveOauthDiagnostic);
   refs.createLocalFolderButton?.addEventListener("click", () => void createLocalFolderFromPanel());
-  refs.createCloudFolderButton?.addEventListener("click", () => void createCloudFolderFromPanel());
-  refs.connectCloudButton?.addEventListener("click", () => void connectCloudProviderFromPanel());
-  refs.disconnectCloudButton?.addEventListener("click", () => void disconnectCloudProviderFromPanel());
   refs.runStorageSyncButton?.addEventListener("click", () => void runStorageSyncNow());
-  refs.exportDevicePackageButton?.addEventListener("click", exportDeviceSyncPackage);
-  refs.importDevicePackageButton?.addEventListener("click", () => refs.importDevicePackageInput?.click());
-  refs.importDevicePackageInput?.addEventListener("change", (event) => void importDeviceSyncPackage(event));
   refs.setupTutorialSyncList?.addEventListener("change", onSettingsTutorialSyncChange);
   refs.closeSetupButton?.addEventListener("click", () => refs.setupDialog?.close());
   refs.createSetupLocalFolderButton?.addEventListener("click", () => void createLocalFolderFromSetupDialog());
-  refs.createSetupCloudFolderButton?.addEventListener("click", () => void createCloudFolderFromSetupDialog());
   refs.setupForm?.addEventListener("submit", (event) => {
     event.preventDefault();
     void saveSetupDialogSettings();
@@ -2891,131 +2864,7 @@ function syncStorageRoutingHintsFromInputs() {
   }
 }
 
-function syncStorageSettingsUiLegacy() {
-  const raw = normalizeUserSettings(state.userSettings);
-  const settings = normalizeUserSettings({
-    ...raw,
-    storageMode: "hybrid",
-    cloudProvider: "supabase",
-    cloudAccountName: "",
-  });
-  state.userSettings = settings;
-  const isSupabase = true;
-  const isGoogleDrive = false;
-  const cloudLabel = "Supabase";
-  const cloudStateLabel = settings.cloudConnected ? "conectado" : "pendiente";
-  const usesRemoteApiSync = true;
-  if (refs.localRootPathInput) {
-    refs.localRootPathInput.value = settings.localRootPath || "";
-  }
-  if (refs.cloudRootPathInput) {
-    refs.cloudRootPathInput.value = settings.cloudRootPath || "";
-    refs.cloudRootPathInput.placeholder = "Ej: trazo (prefijo remoto)";
-  }
-  if (refs.cloudSyncEnabled) {
-    refs.cloudSyncEnabled.checked = settings.cloudEnabled;
-  }
-  if (refs.peerSyncEnabled) {
-    refs.peerSyncEnabled.checked = settings.peerEnabled;
-  }
-  if (refs.storageSetupStatus) {
-    const cloudSummary = "tunel Supabase";
-    refs.storageSetupStatus.textContent = `Modelo: local + tunel Supabase · Tutoriales nube: ${settings.syncTutorialIds.length}`;
-    refs.storageSetupStatus.textContent = `Modo: ${settings.storageMode} · Nube: ${cloudSummary} · Tutoriales nube: ${settings.syncTutorialIds.length}`;
-  }
-  if (refs.storageSetupStatus) {
-    refs.storageSetupStatus.textContent = `Modelo local + tunel Supabase. Tutoriales nube: ${settings.syncTutorialIds.length}`;
-  }
-  syncStorageRoutingHintsFromInputs();
-  if (refs.cloudConnectionStatus) {
-    const connectedAt = settings.cloudConnectedAt
-      ? new Date(settings.cloudConnectedAt).toLocaleString("es-BO", { dateStyle: "short", timeStyle: "short" })
-      : "";
-    const dateLabel = connectedAt ? ` · Desde: ${connectedAt}` : "";
-    if (settings.cloudProvider === "none") {
-      refs.cloudConnectionStatus.textContent = "Proveedor desactivado.";
-    } else if (isSupabase) {
-      refs.cloudConnectionStatus.textContent = settings.cloudConnected
-        ? `Supabase integrado por backend (sin login manual)${dateLabel}.`
-        : "Supabase integrado por backend. Guarda configuracion para activarlo.";
-    } else {
-      refs.cloudConnectionStatus.textContent = `${cloudLabel}: ${cloudStateLabel}${dateLabel}.`;
-    }
-  }
-  if (refs.cloudConnectionStatus) {
-    const connectedAt = settings.cloudConnectedAt
-      ? new Date(settings.cloudConnectedAt).toLocaleString("es-BO", {
-          dateStyle: "short",
-          timeStyle: "short",
-        })
-      : "";
-    const dateLabel = connectedAt ? ` · Desde: ${connectedAt}` : "";
-    refs.cloudConnectionStatus.textContent = settings.cloudConnected
-      ? `Supabase conectado por backend${dateLabel}.`
-      : "Supabase pendiente. Guarda configuracion para activar el tunel.";
-  }
-  if (refs.lastSyncMeta) {
-    refs.lastSyncMeta.textContent = buildLastSyncMeta(settings);
-    refs.lastSyncMeta.classList.toggle("is-error", settings.lastSyncStatus === "error");
-  }
-  if (refs.lastSyncDetails) {
-    const detailItems = buildLastSyncDetailItems(settings);
-    refs.lastSyncDetails.innerHTML = detailItems.length
-      ? detailItems.map((item) => `<li>${escapeHtml(item)}</li>`).join("")
-      : `<li class="meta">Aun no hay ejecuciones registradas.</li>`;
-  }
-
-  if (refs.setupStorageMode) {
-    refs.setupStorageMode.value = settings.storageMode;
-  }
-  if (refs.setupLocalRootPath) {
-    refs.setupLocalRootPath.value = settings.localRootPath || "";
-  }
-  if (refs.setupCloudProvider) {
-    refs.setupCloudProvider.value = settings.cloudProvider;
-  }
-  if (refs.setupCloudRootPath) {
-    refs.setupCloudRootPath.value = settings.cloudRootPath || "";
-    refs.setupCloudRootPath.placeholder = isGoogleDrive
-      ? "Ej: TRAZO (carpeta remota en Google Drive)"
-      : isSupabase
-        ? "Ej: trazo (prefijo remoto en Supabase Storage)"
-        : "Ej: C:\\Users\\TuUsuario\\OneDrive\\TRAZO";
-  }
-  if (refs.setupCloudSyncEnabled) {
-    refs.setupCloudSyncEnabled.checked = settings.cloudEnabled;
-  }
-  if (refs.setupPeerSyncEnabled) {
-    refs.setupPeerSyncEnabled.checked = settings.peerEnabled;
-  }
-  if (refs.createSetupCloudFolderButton) {
-    refs.createSetupCloudFolderButton.disabled = usesRemoteApiSync;
-  }
-
-  if (refs.setupTutorialSyncList) {
-    if (!state.tutorials.length) {
-      refs.setupTutorialSyncList.innerHTML = `<p class="meta">Aun no hay tutoriales.</p>`;
-    } else {
-      const selected = new Set(settings.syncTutorialIds);
-      refs.setupTutorialSyncList.innerHTML = state.tutorials
-        .slice(0, 120)
-        .map((tutorial) => {
-          const checked = selected.has(tutorial.id) ? "checked" : "";
-          const token = renderSidebarTutorialToken(tutorial);
-          return `
-            <label class="column-option">
-              <input type="checkbox" data-sync-tutorial-id="${tutorial.id}" ${checked} />
-              <span class="sync-tutorial-line">${token}<span>${escapeHtml(tutorial.title)}</span></span>
-            </label>
-          `;
-        })
-        .join("");
-    }
-  }
-}
-
 // Canonical UI sync for storage settings (Supabase tunnel + P2P model).
-// Intentionally declared after legacy function body to override stale logic.
 function syncStorageSettingsUi() {
   const raw = normalizeUserSettings(state.userSettings);
   const settings = normalizeUserSettings({
@@ -3103,23 +2952,6 @@ function syncStorageSettingsUi() {
         .join("");
     }
   }
-}
-
-function formatCloudProviderLabel(provider) {
-  const value = String(provider || "none");
-  if (value === "google_drive") {
-    return "Google Drive";
-  }
-  if (value === "supabase") {
-    return "Supabase";
-  }
-  if (value === "one_drive") {
-    return "OneDrive";
-  }
-  if (value === "dropbox") {
-    return "Dropbox";
-  }
-  return "sin proveedor";
 }
 
 function buildLastSyncMeta(settings) {
@@ -3246,193 +3078,23 @@ async function createLocalFolderFromPanel() {
   }
 }
 
-async function createCloudFolderFromPanel() {
-  const provider = String(refs.cloudProviderSelect?.value || "none");
-  if (provider === "google_drive" || provider === "supabase") {
-    const remoteRoot = String(refs.cloudRootPathInput?.value || "").trim();
-    if (!remoteRoot) {
-      window.alert(
-        provider === "google_drive"
-          ? "Escribe un nombre para la carpeta remota de Google Drive."
-          : "Escribe el prefijo remoto que usara Supabase Storage."
-      );
-      return;
-    }
-    if (refs.storageSetupStatus) {
-      refs.storageSetupStatus.textContent =
-        provider === "google_drive"
-          ? `Carpeta remota de Google Drive definida: ${remoteRoot}`
-          : `Prefijo remoto de Supabase definido: ${remoteRoot}`;
-    }
-    return;
-  }
-  const value = String(refs.cloudRootPathInput?.value || "").trim();
-  if (!value) {
-    window.alert("Escribe primero la ruta de carpeta nube.");
-    return;
-  }
-  try {
-    const created = await apiCreateLocalFolder(value);
-    if (refs.cloudRootPathInput) {
-      refs.cloudRootPathInput.value = created.path || value;
-    }
-    if (refs.storageSetupStatus) {
-      refs.storageSetupStatus.textContent = `Carpeta nube creada: ${created.path || value}`;
-    }
-  } catch (error) {
-    showOperationError(error, "No se pudo crear la carpeta nube.");
-  }
-}
-
-async function pickLocalFolderFromExplorer(target = "local") {
+async function pickLocalFolderFromExplorer() {
   if (!state.currentUser) {
     return;
   }
-  const provider = String(refs.cloudProviderSelect?.value || "none");
-  if (target === "cloud" && (provider === "google_drive" || provider === "supabase")) {
-    window.alert(
-      provider === "google_drive"
-        ? "Con Google Drive por API directa no se elige carpeta local. Usa el campo de carpeta nube para el nombre remoto."
-        : "Con Supabase por API directa no se elige carpeta local de nube. Usa el campo de carpeta nube como prefijo remoto."
-    );
-    return;
-  }
   try {
-    const description =
-      target === "cloud"
-        ? "Selecciona la carpeta sincronizada por tu proveedor cloud"
-        : "Selecciona la carpeta local principal de TRAZO";
+    const description = "Selecciona la carpeta local principal de TRAZO";
     const picked = await apiPickFolder(description);
     const pickedPath = String(picked?.path || "").trim();
     if (!pickedPath) {
       return;
     }
-    if (target === "cloud") {
-      if (refs.cloudRootPathInput) {
-        refs.cloudRootPathInput.value = pickedPath;
-      }
-      setSyncStatus(`Carpeta nube seleccionada: ${pickedPath}`);
-    } else {
-      if (refs.localRootPathInput) {
-        refs.localRootPathInput.value = pickedPath;
-      }
-      setSyncStatus(`Carpeta local seleccionada: ${pickedPath}`);
+    if (refs.localRootPathInput) {
+      refs.localRootPathInput.value = pickedPath;
     }
+    setSyncStatus(`Carpeta local seleccionada: ${pickedPath}`);
   } catch (error) {
     showOperationError(error, "No se pudo abrir el explorador de carpetas.");
-  }
-}
-
-function openSelectedCloudProviderSignIn() {
-  let provider = String(refs.cloudProviderSelect?.value || "none");
-  if (provider === "none") {
-    const fallbackProvider =
-      state.userSettings?.cloudProvider && state.userSettings.cloudProvider !== "none"
-        ? state.userSettings.cloudProvider
-        : "google_drive";
-    provider = fallbackProvider;
-    if (refs.cloudProviderSelect) {
-      refs.cloudProviderSelect.value = provider;
-    }
-  }
-  if (provider === "google_drive") {
-    const returnTo = encodeURIComponent(window.location.pathname + window.location.search + (window.location.hash || "#/settings"));
-    window.location.href = `/oauth/google/start?returnTo=${returnTo}`;
-    return;
-  }
-  if (provider === "supabase") {
-    window.alert("Supabase no requiere OAuth en esta app. Usa 'Conectar cuenta seleccionada'.");
-    return;
-  }
-  const providerUrls = {
-    one_drive: "https://login.live.com/",
-    dropbox: "https://www.dropbox.com/login",
-  };
-  const url = providerUrls[provider];
-  if (!url) {
-    window.alert("Primero selecciona un proveedor de nube.");
-    return;
-  }
-  window.open(url, "_blank", "noopener,noreferrer");
-}
-
-function runGoogleOauthDiagnostic() {
-  const provider = String(refs.cloudProviderSelect?.value || "none");
-  if (provider !== "google_drive") {
-    window.alert("Para esta prueba, selecciona Google Drive como proveedor.");
-    return;
-  }
-  const returnTo = encodeURIComponent(window.location.pathname + window.location.search + (window.location.hash || "#/settings"));
-  window.location.href = `/oauth/google/diagnostic/start?returnTo=${returnTo}`;
-}
-
-function runGoogleDriveOauthDiagnostic() {
-  const provider = String(refs.cloudProviderSelect?.value || "none");
-  if (provider !== "google_drive") {
-    window.alert("Para esta prueba, selecciona Google Drive como proveedor.");
-    return;
-  }
-  const returnTo = encodeURIComponent(window.location.pathname + window.location.search + (window.location.hash || "#/settings"));
-  window.location.href = `/oauth/google/diagnostic/start?mode=drive&returnTo=${returnTo}`;
-}
-
-async function connectCloudProviderFromPanel() {
-  if (!state.currentUser) {
-    return;
-  }
-  let provider = String(refs.cloudProviderSelect?.value || "none");
-  if (provider === "none") {
-    const fallbackProvider =
-      state.userSettings?.cloudProvider && state.userSettings.cloudProvider !== "none"
-        ? state.userSettings.cloudProvider
-        : "google_drive";
-    provider = fallbackProvider;
-    if (refs.cloudProviderSelect) {
-      refs.cloudProviderSelect.value = provider;
-    }
-  }
-  if (provider === "google_drive") {
-    try {
-      const draftSettings = collectStorageSettingsFromPanel();
-      await apiUpdateSettings({
-        ...draftSettings,
-        cloudProvider: provider,
-      });
-    } catch {
-      // Continue to OAuth start even if this best-effort update fails.
-    }
-    const returnTo = encodeURIComponent(window.location.pathname + window.location.search + (window.location.hash || "#/settings"));
-    window.location.href = `/oauth/google/start?returnTo=${returnTo}`;
-    return;
-  }
-  try {
-    const draftSettings = collectStorageSettingsFromPanel();
-    await apiUpdateSettings({
-      ...draftSettings,
-      cloudProvider: provider,
-    });
-    const connected = await apiConnectCloudProvider(provider, "");
-    state.userSettings = normalizeUserSettings(connected);
-    syncStorageSettingsUi();
-    syncLiveSyncLoopState();
-    setSyncStatus(`Proveedor conectado: ${formatCloudProviderLabel(provider)}`);
-  } catch (error) {
-    showOperationError(error, "No se pudo conectar el proveedor de nube.");
-  }
-}
-
-async function disconnectCloudProviderFromPanel() {
-  if (!state.currentUser) {
-    return;
-  }
-  try {
-    const next = await apiDisconnectCloudProvider();
-    state.userSettings = normalizeUserSettings(next);
-    syncStorageSettingsUi();
-    syncLiveSyncLoopState();
-    setSyncStatus("Proveedor de nube desconectado.");
-  } catch (error) {
-    showOperationError(error, "No se pudo desconectar el proveedor de nube.");
   }
 }
 
@@ -3448,42 +3110,6 @@ async function createLocalFolderFromSetupDialog() {
     setSetupStatus(`Carpeta creada: ${created.path || value}`);
   } catch (error) {
     setSetupStatus(resolveError(error, "No se pudo crear la carpeta local."), true);
-  }
-}
-
-async function createCloudFolderFromSetupDialog() {
-  const provider = String(refs.setupCloudProvider?.value || "none");
-  if (provider === "google_drive" || provider === "supabase") {
-    const remoteRoot = String(refs.setupCloudRootPath?.value || "").trim();
-    if (!remoteRoot) {
-      setSetupStatus(
-        provider === "google_drive"
-          ? "Escribe un nombre para la carpeta remota de Google Drive."
-          : "Escribe el prefijo remoto para Supabase Storage.",
-        true
-      );
-      return;
-    }
-    setSetupStatus(
-      provider === "google_drive"
-        ? `Carpeta remota de Google Drive definida: ${remoteRoot}`
-        : `Prefijo remoto de Supabase definido: ${remoteRoot}`
-    );
-    return;
-  }
-  const value = String(refs.setupCloudRootPath?.value || "").trim();
-  if (!value) {
-    setSetupStatus("Escribe una carpeta nube primero.", true);
-    return;
-  }
-  try {
-    const created = await apiCreateLocalFolder(value);
-    if (refs.setupCloudRootPath) {
-      refs.setupCloudRootPath.value = created.path || value;
-    }
-    setSetupStatus(`Carpeta nube creada: ${created.path || value}`);
-  } catch (error) {
-    setSetupStatus(resolveError(error, "No se pudo crear la carpeta nube."), true);
   }
 }
 
@@ -3528,59 +3154,6 @@ async function runStorageSyncNow() {
     setSyncStatus(`Sincronizacion completada | ${count} tutorial(es) | estado: ${status}`);
   } catch (error) {
     showOperationError(error, "No se pudo ejecutar la sincronizacion.");
-  }
-}
-
-function exportDeviceSyncPackage() {
-  if (!state.currentUser) {
-    return;
-  }
-  const selected =
-    Array.isArray(state.userSettings.syncTutorialIds) && state.userSettings.syncTutorialIds.length
-      ? new Set(state.userSettings.syncTutorialIds)
-      : null;
-  const tutorials = selected ? state.tutorials.filter((item) => selected.has(item.id)) : [...state.tutorials];
-  const payload = {
-    version: 1,
-    exportedAt: new Date().toISOString(),
-    app: "TRAZO",
-    settings: state.userSettings,
-    tutorials,
-  };
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `trazo-sync-package-${new Date().toISOString().slice(0, 10)}.json`;
-  anchor.click();
-  URL.revokeObjectURL(url);
-}
-
-async function importDeviceSyncPackage(event) {
-  const file = event.target.files?.[0];
-  if (!file) {
-    return;
-  }
-  try {
-    const parsed = JSON.parse(await file.text());
-    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.tutorials)) {
-      throw new Error("Formato de paquete invalido.");
-    }
-    const incomingSettings = normalizeUserSettings(parsed.settings || {});
-    await apiReplaceTutorials(parsed.tutorials.map(normalizeTutorial));
-    await apiUpdateSettings({
-      ...incomingSettings,
-      setupCompleted: true,
-    });
-    await refreshTutorials();
-    await refreshUserSettings();
-    window.alert(`Paquete importado: ${parsed.tutorials.length} tutorial(es).`);
-  } catch (error) {
-    showOperationError(error, "No se pudo importar el paquete de dispositivo.");
-  } finally {
-    if (refs.importDevicePackageInput) {
-      refs.importDevicePackageInput.value = "";
-    }
   }
 }
 

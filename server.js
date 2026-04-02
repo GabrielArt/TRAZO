@@ -57,6 +57,10 @@ const APP_SNAPSHOT_SAVE_DEBOUNCE_MS = Math.max(1000, Number(process.env.APP_SNAP
 const SUPABASE_AUTH_SNAPSHOT_OBJECT = asTrimmedString(process.env.SUPABASE_AUTH_SNAPSHOT_OBJECT) || "_system/auth-state-v1.json";
 const AUTH_SNAPSHOT_SAVE_DEBOUNCE_MS = Math.max(500, Number(process.env.AUTH_SNAPSHOT_SAVE_DEBOUNCE_MS) || 1500);
 const AUTO_CLOUD_SYNC_READ_MS = Number(process.env.AUTO_CLOUD_SYNC_READ_MS) || 1000;
+const APP_VERSION =
+  asTrimmedString(process.env.RENDER_GIT_COMMIT).slice(0, 12) ||
+  asTrimmedString(process.env.RENDER_GIT_BRANCH) ||
+  "local";
 const CLOUD_MEDIA_TRANSFER_MAX_BYTES = readPositiveBytesEnv(
   process.env.CLOUD_MEDIA_TRANSFER_MAX_BYTES,
   100 * 1024 * 1024
@@ -137,8 +141,30 @@ const upload = multer({
 });
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, service: "tutorial-vault-api" });
+  res.json({ ok: true, service: "tutorial-vault-api", version: APP_VERSION });
 });
+
+app.get(
+  "/api/health/auth",
+  asyncHandler(async (_req, res) => {
+    try {
+      await ensureAuthSchemaReady();
+      const [usersColumns, sessionsColumns, usersCountRow] = await Promise.all([
+        allAsync("PRAGMA table_info(users)"),
+        allAsync("PRAGMA table_info(sessions)"),
+        getAsync("SELECT COUNT(1) AS count FROM users"),
+      ]);
+      res.json({
+        ok: true,
+        usersColumns: usersColumns.map((item) => item.name),
+        sessionsColumns: sessionsColumns.map((item) => item.name),
+        usersCount: Number(usersCountRow?.count || 0),
+      });
+    } catch (error) {
+      res.status(500).json({ ok: false, error: resolveErrorMessage(error) });
+    }
+  })
+);
 
 app.get("/api/client-config", (_req, res) => {
   res.json({

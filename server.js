@@ -153,6 +153,7 @@ app.post(
   "/api/auth/register",
   authRateLimiter,
   asyncHandler(async (req, res) => {
+    await ensureAuthSchemaReady();
     const email = normalizeEmail(req.body?.email);
     const password = asTrimmedString(req.body?.password);
 
@@ -194,6 +195,7 @@ app.post(
   "/api/auth/login",
   authRateLimiter,
   asyncHandler(async (req, res) => {
+    await ensureAuthSchemaReady();
     const email = normalizeEmail(req.body?.email);
     const password = asTrimmedString(req.body?.password);
 
@@ -845,35 +847,7 @@ async function startServer() {
 
 async function initializeDatabase() {
   await runAsync("PRAGMA foreign_keys = ON");
-
-  await runAsync(`
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      email TEXT NOT NULL UNIQUE,
-      password_hash TEXT NOT NULL,
-      password_salt TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    )
-  `);
-  await ensureColumn("users", "id", "TEXT NOT NULL DEFAULT ''");
-  await ensureColumn("users", "email", "TEXT NOT NULL DEFAULT ''");
-  await ensureColumn("users", "password_hash", "TEXT NOT NULL DEFAULT ''");
-  await ensureColumn("users", "password_salt", "TEXT NOT NULL DEFAULT ''");
-  await ensureColumn("users", "created_at", "TEXT NOT NULL DEFAULT ''");
-
-  await runAsync(`
-    CREATE TABLE IF NOT EXISTS sessions (
-      token_hash TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      expires_at TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-    )
-  `);
-  await ensureColumn("sessions", "token_hash", "TEXT NOT NULL DEFAULT ''");
-  await ensureColumn("sessions", "user_id", "TEXT NOT NULL DEFAULT ''");
-  await ensureColumn("sessions", "expires_at", "TEXT NOT NULL DEFAULT ''");
-  await ensureColumn("sessions", "created_at", "TEXT NOT NULL DEFAULT ''");
+  await ensureAuthSchemaReady();
 
   await runAsync(`
     CREATE TABLE IF NOT EXISTS tutorials (
@@ -1021,6 +995,37 @@ async function createSession(userId) {
   ]);
   markAuthStateSnapshotDirty("session_create");
   return token;
+}
+
+async function ensureAuthSchemaReady() {
+  await runAsync(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      password_salt TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+  `);
+  await ensureColumn("users", "id", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn("users", "email", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn("users", "password_hash", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn("users", "password_salt", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn("users", "created_at", "TEXT NOT NULL DEFAULT ''");
+
+  await runAsync(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      token_hash TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+  await ensureColumn("sessions", "token_hash", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn("sessions", "user_id", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn("sessions", "expires_at", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn("sessions", "created_at", "TEXT NOT NULL DEFAULT ''");
 }
 
 function setSessionCookie(res, token) {

@@ -855,6 +855,7 @@ async function initializeDatabase() {
       created_at TEXT NOT NULL
     )
   `);
+  await ensureColumn("users", "id", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn("users", "email", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn("users", "password_hash", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn("users", "password_salt", "TEXT NOT NULL DEFAULT ''");
@@ -869,6 +870,7 @@ async function initializeDatabase() {
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `);
+  await ensureColumn("sessions", "token_hash", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn("sessions", "user_id", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn("sessions", "expires_at", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn("sessions", "created_at", "TEXT NOT NULL DEFAULT ''");

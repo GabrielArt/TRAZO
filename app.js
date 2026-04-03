@@ -1,4 +1,6 @@
-const API_BASE = "/api";
+const REMOTE_API_ORIGIN = "https://trazo-api.onrender.com";
+const API_ORIGIN = resolveApiOrigin();
+const API_BASE = `${API_ORIGIN}/api`;
 const STATUS_ORDER = ["Por ver", "En progreso", "Aplicado", "Archivado"];
 const DEFAULT_MAX_UPLOAD_SIZE_BYTES = 5 * 1024 * 1024 * 1024;
 const DEFAULT_CLOUD_MEDIA_TRANSFER_MAX_BYTES = 100 * 1024 * 1024;
@@ -21,6 +23,40 @@ const EMOJI_PICKER_TABS = Object.freeze([
   { id: "arrows", label: "Flechas" },
   { id: "misc", label: "Varios" },
 ]);
+
+function resolveApiOrigin() {
+  try {
+    const host = String(window.location.hostname || "").toLowerCase();
+    if (host.endsWith("netlify.app")) {
+      return REMOTE_API_ORIGIN;
+    }
+  } catch {
+    // Ignore and fallback to same-origin API.
+  }
+  return "";
+}
+
+function resolveMediaAssetUrl(rawUrl) {
+  const value = String(rawUrl || "").trim();
+  if (!value) {
+    return "";
+  }
+  if (!API_ORIGIN) {
+    return value;
+  }
+  if (value.startsWith("/uploads/")) {
+    return `${API_ORIGIN}${value}`;
+  }
+  try {
+    const parsed = new URL(value, window.location.origin);
+    if (parsed.pathname.startsWith("/uploads/") && parsed.hostname.endsWith("netlify.app")) {
+      return `${API_ORIGIN}${parsed.pathname}${parsed.search}${parsed.hash}`;
+    }
+    return parsed.toString();
+  } catch {
+    return value;
+  }
+}
 const EMOJI_PICKER_LIBRARY = Object.freeze({
   faces: Object.freeze([
     { symbol: "☺", label: "sonrisa", keywords: "feliz cara sonrisa" },
@@ -8945,7 +8981,7 @@ function extractYouTubeId(url) {
 }
 
 function isLikelyVideoUrl(url) {
-  return !!url && (/(\.mp4|\.webm|\.mov|\.ogg)(\?.*)?$/i.test(url) || url.startsWith("/uploads/"));
+  return !!url && (/(\.mp4|\.webm|\.mov|\.ogg)(\?.*)?$/i.test(url) || /\/uploads\//i.test(url));
 }
 
 function isLikelyPortraitEmbedUrl(url) {
@@ -10200,7 +10236,7 @@ function normalizeExtraContentBlocks(value, noteSideFallback = state.notesSide) 
         }
         return { id, type, text, caption, note, noteSide, createdAt };
       }
-      const url = typeof item.url === "string" ? item.url : "";
+      const url = resolveMediaAssetUrl(typeof item.url === "string" ? item.url : "");
       if (!url.trim()) {
         return null;
       }
@@ -10219,9 +10255,9 @@ function normalizeTutorial(item) {
     title: typeof item.title === "string" && item.title.trim() ? item.title.trim() : "Sin titulo",
     type: item.type === "video" || item.type === "image" || item.type === "text" ? item.type : "text",
     source: typeof item.source === "string" ? item.source : "manual",
-    url: typeof item.url === "string" ? item.url : "",
-    normalizedUrl: normalizeUrl(typeof item.url === "string" ? item.url : ""),
-    imageUrl: typeof item.imageUrl === "string" ? item.imageUrl : "",
+    url: resolveMediaAssetUrl(typeof item.url === "string" ? item.url : ""),
+    normalizedUrl: normalizeUrl(resolveMediaAssetUrl(typeof item.url === "string" ? item.url : "")),
+    imageUrl: resolveMediaAssetUrl(typeof item.imageUrl === "string" ? item.imageUrl : ""),
     textContent: coerceRichFieldValue(typeof item.textContent === "string" ? item.textContent : ""),
     category: typeof item.category === "string" ? item.category : "",
     collection: typeof item.collection === "string" ? item.collection : "",
@@ -10472,6 +10508,13 @@ function apiUploadFile(file, onProgress, options = {}) {
       if (xhr.status < 200 || xhr.status >= 300) {
         const message = body && typeof body === "object" && "error" in body && body.error ? body.error : `Error al subir archivo (${xhr.status})`;
         reject(new Error(String(message)));
+        return;
+      }
+      if (body && typeof body === "object" && typeof body.url === "string") {
+        resolve({
+          ...body,
+          url: resolveMediaAssetUrl(body.url),
+        });
         return;
       }
       resolve(body);

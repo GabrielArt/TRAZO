@@ -831,7 +831,7 @@ app.use("/api", (_req, res) => {
   res.status(404).json({ error: "Ruta no encontrada." });
 });
 
-app.use((error, req, res, _next) => {
+app.use((error, _req, res, _next) => {
   if (error instanceof UploadValidationError) {
     res.status(400).json({ error: error.message });
     return;
@@ -844,16 +844,6 @@ app.use((error, req, res, _next) => {
 
   if (error instanceof multer.MulterError) {
     res.status(400).json({ error: "No se pudo procesar el archivo." });
-    return;
-  }
-
-  const requestPath = asTrimmedString(req?.path || "");
-  if (requestPath.startsWith("/api/auth/") || requestPath === "/api/health/auth") {
-    console.error("[auth-debug]", error);
-    res.status(500).json({
-      error: "Error interno del servidor.",
-      detail: resolveErrorMessage(error),
-    });
     return;
   }
 
